@@ -53,6 +53,7 @@
    ".itonami-metric__label{color:var(--hig-color-secondary-label)}"
    ".itonami-metric__value{font-size:1.75rem;line-height:1.1;"
    "color:var(--hig-color-label)}"
+   ".itonami-metric__value--sm{font-size:1.125rem}"
    ".itonami-metric__detail{color:var(--hig-color-tertiary-label)}"
    ".itonami-effects{display:flex;flex-direction:column;gap:0.5rem}"
    ".itonami-effect{border:1px solid var(--hig-color-separator);"

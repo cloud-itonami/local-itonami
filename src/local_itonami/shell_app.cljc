@@ -23,7 +23,8 @@
   `:session` in the state map. That is the safety floor from the root
   CLAUDE.md — credential material is read by a credential-specific tool, not
   typed into a form by the app."
-  (:require [local-itonami.dom :as dom]
+  (:require [local-itonami.access :as access]
+            [local-itonami.dom :as dom]
             [local-itonami.view :as view]))
 
 (def initial-state
@@ -34,6 +35,8 @@
    :scope {:org "gftdcojp" :repo "gftdcojp"}
    :metrics []
    :effects nil
+   ;; nil = まだサインインしていない。access/session が返す
+   ;; {:status :admitted|:denied ...} が入るまで業務セクションは描かれない。
    :session nil})
 
 (defn metrics-of
@@ -60,6 +63,20 @@
 (defn apply-effects
   [state effects]
   (assoc state :status :ready :effects (vec effects)))
+
+(defn apply-identity
+  "host が解決した provider identity profile を cockpit のサインイン状態に
+  変える。判定は local-itonami.access（deny by default、gftd.co.jp の検証済み
+  Workspace identity のみ）。**この関数は profile を state に残さない** —
+  残すのは access/session が返す表示用の最小限だけ。"
+  [state profile]
+  (assoc state :session (access/session profile)))
+
+(defn signed-out
+  "サインアウト。業務データも一緒に落とす — session だけ消して effects を
+  残すと、次のフレームまで前のユーザーのキューが画面に残る。"
+  [state]
+  (assoc state :session nil :effects nil :metrics [] :status :booting))
 
 (defn apply-error
   "A failed fetch must not silently keep stale numbers on screen looking

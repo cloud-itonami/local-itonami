@@ -28,6 +28,7 @@
   keeps them honest is the API contract itself (`/api/{org}/{repo}/…`), not a
   shared render path."
   (:require [clojure.string :as str]
+            [local-itonami.access :as access]
             [local-itonami.skin :as skin]))
 
 ;; ───────────────────────── formatting ─────────────────────────
@@ -149,17 +150,88 @@
      :else
      [:p {:class "itonami-empty"} "読み込み中…"])))
 
+(def crm-kinds
+  "cloud-itonami-isic-5820 由来（商談）。cloud-itonami.crm の投影 kind に一致。"
+  #{"crm/advance-opportunity" "crm/qualify-lead" "crm/convert-lead"
+    "crm/disclose-account"})
+
+(def marketing-kinds
+  "cloud-itonami-isic-6201 由来（マーケ）。"
+  #{"marketing/send-campaign" "marketing/advance-lead" "marketing/score-lead"})
+
+(defn lane-of
+  "effect をコックピットのレーンに振り分ける。既定は :workspace —
+  未知の kind を捨てずに必ずどこかに出す（捨てると『承認待ちのはずのものが
+  画面のどこにも無い』が起きる）。"
+  [{:keys [kind]}]
+  (let [k (some-> kind name)]
+    (cond
+      (contains? crm-kinds k) :crm
+      (contains? marketing-kinds k) :marketing
+      :else :workspace)))
+
+(defn lane-section
+  "1レーン分のキュー。`queue-section` と同じ三状態（未ロード / 空 / 有り）。"
+  [title effects]
+  (let [pending (filter needs-attention? effects)]
+    (skin/section
+     (skin/heading 2 title)
+     (cond
+       (nil? effects) [:p {:class "itonami-empty"} "読み込み中…"]
+       (empty? pending) [:p {:class "itonami-empty"} "承認待ちはありません。"]
+       :else (into [:div {:class "itonami-effects"}] (map effect-row pending))))))
+
+(defn sign-in-section
+  "サインイン状態。
+
+  `local-itonami.access` が deny を返したときは**理由だけ**を出す
+  （access/session は拒否時に相手の identity を保持しない）。"
+  [session]
+  (case (:status session)
+    :admitted
+    (skin/section
+     (skin/heading 2 "サインイン")
+     (skin/card
+      [:div {:class "itonami-metric"}
+       [:span {:class "itonami-metric__label"} "アカウント"]
+       [:strong {:class "itonami-metric__value itonami-metric__value--sm"}
+        (str (or (:display-name session) (:email session)))]
+       [:small {:class "itonami-metric__detail"}
+        (str (:email session) " · " (:domain session))]]))
+
+    :denied
+    (skin/section
+     (skin/heading 2 "サインイン")
+     (skin/notice (:message session) {:tone :error}))
+
+    (skin/section
+     (skin/heading 2 "サインイン")
+     [:p {:class "itonami-empty"}
+      (str access/allowed-domain " の組織アカウントでサインインしてください。")])))
+
 (defn screen
   "The whole cockpit as one hiccup tree.
 
   Pure: `state` in, hiccup out. `local-itonami.shell-app` compiles this to
   kotoba:dom operations and `local-itonami.web` renders the same tree to
-  HTML — one view, two surfaces."
-  [{:keys [scope metrics effects status] :as _state}]
-  [:div {:class "itonami-app"}
-   (header scope)
-   (skin/container
-    (when (= :error status)
-      (skin/notice "itonami.cloud に接続できませんでした。" {:tone :error}))
-    (metrics-section metrics status)
-    (queue-section effects))])
+  HTML — one view, two surfaces.
+
+  **サインインが `:admitted` でない限り業務データのセクションを一切描かない。**
+  『空で描いておいてデータだけ出さない』にしないのは、空セクションが
+  『アクセスできている / 単に0件』と読めてしまうため — 見えないことが
+  そのまま『見せていない』の表明になる形にする。"
+  [{:keys [scope metrics effects status session] :as _state}]
+  (let [admitted? (= :admitted (:status session))
+        by-lane (when effects (group-by lane-of effects))]
+    [:div {:class "itonami-app"}
+     (header scope)
+     (skin/container
+      (when (= :error status)
+        (skin/notice "itonami.cloud に接続できませんでした。" {:tone :error}))
+      (sign-in-section session)
+      (when admitted?
+        (list
+         (metrics-section metrics status)
+         (lane-section "承認待ち — 業務" (when effects (get by-lane :workspace [])))
+         (lane-section "承認待ち — 商談" (when effects (get by-lane :crm [])))
+         (lane-section "承認待ち — マーケ" (when effects (get by-lane :marketing []))))))]))

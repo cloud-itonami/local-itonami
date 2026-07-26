@@ -12,7 +12,16 @@
  :deps {org.clojure/clojure {:mvn/version "1.12.4"}
         io.github.kotoba-lang/jp-go-digital-design-system
         {:local/root "../../kotoba-lang/jp-go-digital-design-system"}
-        io.github.kotoba-lang/html {:local/root "../../kotoba-lang/html"}}
+        io.github.kotoba-lang/html {:local/root "../../kotoba-lang/html"}
+        ;; Domain-restricted access (local-itonami.access). authentication
+        ;; supplies email normalisation + the provider-neutral identity
+        ;; profile; authorization supplies the deny-by-default rules engine
+        ;; that actually decides. The split is deliberate -- see the ns
+        ;; docstring for why the domain check is NOT an authn factor.
+        io.github.kotoba-lang/authentication
+        {:local/root "../../kotoba-lang/authentication"}
+        io.github.kotoba-lang/authorization
+        {:local/root "../../kotoba-lang/authorization"}}
  :aliases
  {:test {:extra-paths ["test"]
          :extra-deps {io.github.cognitect-labs/test-runner

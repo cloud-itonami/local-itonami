@@ -11,7 +11,13 @@
             [local-itonami.view :as view]))
 
 (def ^:private sample-state
+  "サインイン済みの通常状態。ゲート自体のテストは
+  `business-data-is-not-rendered-without-an-admitted-session` が別に持つ ——
+  ここは skin / レーン / 空状態の検証なので、業務セクションが描かれる前提を
+  fixture 側で満たしておく。"
   {:status :ready
+   :session {:status :admitted :email "jun@gftd.co.jp"
+             :display-name "Jun Kawasaki" :domain "gftd.co.jp"}
    :scope {:org "gftdcojp" :repo "gftdcojp"}
    :metrics [{:label "外部テナント" :value "5" :detail "self-registered 含む"}]
    :effects [{:id "eff-1" :kind "crm/advance-opportunity"
@@ -115,3 +121,46 @@
     (is (str/includes?
          (pr-str (view/metrics-section [{:label "外部テナント" :value "5" :detail "d"}] :ready))
          "外部テナント"))))
+
+;; ───────────────── サインインゲート ─────────────────
+
+(def ^:private admitted-session
+  {:status :admitted :email "jun@gftd.co.jp" :display-name "Jun Kawasaki"
+   :domain "gftd.co.jp"})
+
+(deftest business-data-is-not-rendered-without-an-admitted-session
+  (testing "未サインインでは業務セクションを一切描かない"
+    (let [s (pr-str (view/screen (assoc sample-state :session nil)))]
+      (is (str/includes? s "サインイン"))
+      (is (not (str/includes? s "現況")))
+      (is (not (str/includes? s "承認待ち")))
+      (is (not (str/includes? s "eff-1"))
+          "承認待ちの effect id が未サインイン画面に出ている")))
+
+  (testing "拒否されたセッションでも同じ — 理由だけ出す"
+    (let [s (pr-str (view/screen
+                     (assoc sample-state :session
+                            {:status :denied :reason :domain-not-allowed
+                             :message "このサービスは gftd.co.jp のアカウントのみ利用できます。"})))]
+      (is (str/includes? s "gftd.co.jp のアカウントのみ"))
+      (is (not (str/includes? s "eff-1")))
+      (is (not (str/includes? s "現況")))))
+
+  (testing "許可されたセッションでのみ業務セクションが出る"
+    (let [s (pr-str (view/screen (assoc sample-state :session admitted-session)))]
+      (is (str/includes? s "現況"))
+      (is (str/includes? s "eff-1"))
+      (is (str/includes? s "jun@gftd.co.jp")))))
+
+(deftest effects-are-split-into-lanes
+  (let [s (pr-str (view/screen (assoc sample-state :session admitted-session)))]
+    (is (str/includes? s "承認待ち — 業務"))
+    (is (str/includes? s "承認待ち — 商談"))
+    (is (str/includes? s "承認待ち — マーケ")))
+  (testing "kind ごとに正しいレーンへ"
+    (is (= :crm (view/lane-of {:kind "crm/advance-opportunity"})))
+    (is (= :marketing (view/lane-of {:kind "marketing/send-campaign"})))
+    (is (= :workspace (view/lane-of {:kind "mail/send"}))))
+  (testing "未知の kind は捨てずに :workspace へ"
+    (is (= :workspace (view/lane-of {:kind "future/kind"})))
+    (is (= :workspace (view/lane-of {:kind nil})))))
