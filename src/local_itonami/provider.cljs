@@ -59,7 +59,7 @@
 
   `authentication.adapters.webcrypto/pkce-pair` が verifier と challenge を
   まとめて返すので、それをそのまま使う（PKCE の組み立てを再実装しない）。"
-  [{:keys [authorize-endpoint client-id redirect-uri hd]}]
+  [{:keys [authorize-endpoint client-id redirect-uri]}]
   (-> (webcrypto/pkce-pair)
       (.then
        (fn [pair]
@@ -74,16 +74,12 @@
                         "state" state
                         "nonce" nonce
                         "code_challenge" challenge
-                        "code_challenge_method" "S256"
-                        ;; UX のみ。実際の判定は ID token の hd claim に対して
-                        ;; signin/complete が行う（リクエストパラメータは
-                        ;; 利用者が書き換えられる）。
-                        "hd" hd}
+                        "code_challenge_method" "S256"}
                        (keep (fn [[k v]] (when v (str (js/encodeURIComponent k) "="
                                                       (js/encodeURIComponent v)))))
                        (str/join "&"))]
            {:url (str authorize-endpoint "?" qs)
-            :pending {:code-verifier verifier :state state :nonce nonce :hd hd}})))))
+            :pending {:code-verifier verifier :state state :nonce nonce}})))))
 
 ;; ───────────────────────── :http-post-form / :http-get-json ─────────────────────────
 

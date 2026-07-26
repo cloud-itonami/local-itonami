@@ -1,130 +1,177 @@
 (ns local-itonami.access-test
-  "ドメイン制限の契約テスト。
+  "組織アクセス許可の契約テスト（Entra ID / Microsoft 365）。
 
-  ここで一番大事なのは**通るケースではなく、通ってはいけないケース**。
-  `admits-only-verified-gftd-workspace-identities` の各項目はどれも
-  『これが通ったら gftd の業務データが部外者に見える』に直結する。"
+  一番大事なのは通るケースではなく**通ってはいけないケース**。
+  各項目はどれも『これが通ったら gftd の業務データが部外者に見える』に
+  直結する。"
   (:require #?(:clj [clojure.test :refer [deftest is testing]]
                :cljs [cljs.test :refer-macros [deftest is testing]])
             [local-itonami.access :as access]))
 
+(def ^:private tenant "11111111-2222-3333-4444-555555555555")
+(def ^:private other-tenant "99999999-8888-7777-6666-555555555555")
+
 (defn- profile
-  "Google Workspace 経路の正規 profile を作り、overrides で1点だけ崩す。"
+  "gftd テナントの正規メンバー profile を作り、overrides で1点だけ崩す。"
   [overrides]
-  (merge {:identity/provider :google
+  (merge {:identity/provider :microsoft
           :identity/provider-subject "sub-1"
           :identity/email "jun@gftd.co.jp"
-          :identity/email-verified? true
           :identity/display-name "Jun Kawasaki"
-          :identity/claims {:hd "gftd.co.jp"}}
+          :identity/claims {:tid tenant
+                            :iss (access/tenant-issuer tenant)
+                            :oid "oid-1"
+                            :acct 0
+                            :preferred_username "jun@gftd.co.jp"}}
          overrides))
 
-;; ───────────────── 通ってよい唯一のケース ─────────────────
+(defn- with-claims [profile-map & kvs]
+  (update profile-map :identity/claims merge (apply hash-map kvs)))
 
-(deftest admits-a-verified-gftd-workspace-identity
-  (let [s (access/session (profile {}))]
-    (is (= :admitted (:status s)))
-    (is (= "jun@gftd.co.jp" (:email s)))
-    (is (= "gftd.co.jp" (:domain s))))
-  (testing "大文字・前後空白は正規化される"
-    (is (true? (access/admitted?
-                (profile {:identity/email "  Jun@GFTD.co.JP  "
-                          :identity/claims {:hd "GFTD.co.jp"}}))))))
+(defmacro ^:private configured [& body]
+  `(binding [access/*tenant-id* tenant] ~@body))
 
-;; ───────────────── 通ってはいけないケース ─────────────────
+;; ───────────────────────── 通ってよい唯一のケース ─────────────────────────
 
-(deftest admits-only-verified-gftd-workspace-identities
-  (testing "未検証メールは通さない — 自己申告のアドレスは証拠ではない"
-    (is (false? (access/admitted? (profile {:identity/email-verified? false}))))
-    (is (= :email-not-verified (access/denial-reason (profile {:identity/email-verified? false})))))
+(deftest admits-a-member-of-the-configured-entra-tenant
+  (configured
+   (let [s (access/session (profile {}))]
+     (is (= :admitted (:status s)))
+     (is (= "jun@gftd.co.jp" (:email s)))
+     (is (= "gftd.co.jp" (:domain s)))))
 
-  (testing "email-verified? が欠落/nil でも通さない(true? で判定している)"
-    (is (false? (access/admitted? (profile {:identity/email-verified? nil}))))
-    (is (false? (access/admitted? (dissoc (profile {}) :identity/email-verified?)))))
+  (testing "大文字・前後空白の tid も一致する"
+    (binding [access/*tenant-id* (str "  " (.toUpperCase tenant) "  ")]
+      (is (true? (access/admitted? (profile {})))))))
 
-  (testing "hd claim が無ければ通さない — email だけ騙れば入れる穴を塞ぐ"
-    (is (false? (access/admitted? (profile {:identity/claims {}}))))
-    (is (= :no-hosted-domain-claim
-           (access/denial-reason (profile {:identity/claims {}})))))
+;; ───────────── 設定漏れが素通りにならない ─────────────
 
-  (testing "hd と email の domain が食い違えば通さない"
-    (is (false? (access/admitted? (profile {:identity/claims {:hd "example.com"}}))))
-    (is (= :hosted-domain-mismatch
-           (access/denial-reason (profile {:identity/claims {:hd "example.com"}})))))
-
-  (testing "他ドメインは通さない"
-    (doseq [e ["someone@gmail.com" "a@example.com" "b@gftd.group"]]
-      (is (false? (access/admitted?
-                   (profile {:identity/email e :identity/claims {:hd "gmail.com"}})))
-          (str e " が通ってしまった"))))
-
-  (testing "似せたドメインは通さない — 部分一致/接尾辞一致は典型的な迂回路"
-    (doseq [d ["evil-gftd.co.jp" "gftd.co.jp.evil.com" "xgftd.co.jp"
-               "gftd.co.jp2" "notgftd.co.jp"]]
-      (is (false? (access/admitted?
-                   (profile {:identity/email (str "x@" d)
-                             :identity/claims {:hd d}})))
-          (str d " が通ってしまった"))))
-
-  (testing "サブドメインも通さない — 許可は完全一致のみ"
-    (doseq [d ["mail.gftd.co.jp" "sub.gftd.co.jp"]]
-      (is (false? (access/admitted?
-                   (profile {:identity/email (str "x@" d)
-                             :identity/claims {:hd d}})))
-          (str d " が通ってしまった"))))
-
-  (testing "メールが無い/壊れている経路は通さない"
-    (doseq [e [nil "" "not-an-email" "@gftd.co.jp" "jun@" "jun@@gftd.co.jp"]]
-      (is (false? (access/admitted?
-                   (profile {:identity/email e})))
-          (str (pr-str e) " が通ってしまった")))))
-
-(deftest deny-by-default
-  (testing "profile が空でも例外にならず deny になる"
-    (is (false? (access/admitted? {})))
-    (is (= :denied (:status (access/session {})))))
-  (testing "policy の既定は deny"
-    (is (= :deny (:authz.policy/default-decision access/policy))))
-  (testing "allow rule は1本だけ — 増えていたら意図的な変更か確認する"
+(deftest nobody-is-admitted-until-the-organization-is-configured
+  (testing "テナント GUID 未設定なら誰も通らない"
+    (is (false? (access/admitted? (profile {}))))
+    (is (= :organization-not-configured (access/denial-reason (profile {})))))
+  (testing "policy の既定は deny、allow rule は1本だけ"
+    (is (= :deny (:authz.policy/default-decision access/policy)))
     (is (= 1 (count (:authz.policy/rules access/policy))))))
 
-;; ───────────────── 拒否時に何を残すか ─────────────────
+;; ───────────── 通ってはいけないケース ─────────────
+
+(deftest admits-only-members-of-our-tenant
+  (configured
+   (testing "別テナントは通さない — tid が組織の正本"
+     (is (false? (access/admitted?
+                  (with-claims (profile {}) :tid other-tenant
+                               :iss (access/tenant-issuer other-tenant)))))
+     (is (= :different-organization
+            (access/denial-reason
+             (with-claims (profile {}) :tid other-tenant
+                          :iss (access/tenant-issuer other-tenant))))))
+
+   (testing "tid claim が無ければ通さない"
+     (is (false? (access/admitted?
+                  (assoc-in (profile {}) [:identity/claims :tid] nil))))
+     (is (= :no-tenant-claim
+            (access/denial-reason (assoc-in (profile {}) [:identity/claims :tid] nil)))))
+
+   (testing "tid は正しいが iss が別テナントの issuer — 使い回しを塞ぐ"
+     (is (false? (access/admitted?
+                  (with-claims (profile {}) :iss (access/tenant-issuer other-tenant)))))
+     (is (= :issuer-tenant-mismatch
+            (access/denial-reason
+             (with-claims (profile {}) :iss (access/tenant-issuer other-tenant))))))
+
+   (testing "iss が Microsoft ですらない"
+     (is (false? (access/admitted?
+                  (with-claims (profile {}) :iss "https://evil.example/v2.0")))))
+
+   (testing "B2B ゲストは我々の tid を持つが通さない"
+     (let [guest (with-claims (profile {:identity/email "outsider@example.com"})
+                              :acct 1 :preferred_username "outsider@example.com")]
+       (is (false? (access/admitted? guest)))
+       (is (= :guest-account (access/denial-reason guest)))))
+
+   (testing "acct claim が無い場合、ドメイン不一致は guest とみなす — 判定不能を
+             member 扱いに倒さない"
+     (let [unknown (-> (profile {:identity/email "outsider@example.com"})
+                       (update :identity/claims dissoc :acct)
+                       (assoc-in [:identity/claims :preferred_username] "outsider@example.com"))]
+       (is (false? (access/admitted? unknown)))))
+
+   (testing "Google の identity は通さない — 組織は Microsoft テナント"
+     (is (false? (access/admitted?
+                  (assoc (profile {}) :identity/provider :google)))))
+
+   (testing "似せたドメインは通さない"
+     (doseq [d ["evil-gftd.co.jp" "gftd.co.jp.evil.com" "mail.gftd.co.jp"]]
+       (is (false? (access/admitted?
+                    (-> (profile {:identity/email (str "x@" d)})
+                        (assoc-in [:identity/claims :preferred_username] (str "x@" d)))))
+           (str d " が通ってしまった"))))))
+
+(deftest email-verified-is-not-required-because-entra-does-not-emit-it
+  (testing "Entra は email_verified を既定で出さない。要求すると常に deny に
+            なるので、tid + issuer + member/guest を材料にしている"
+    (configured
+     (is (true? (access/admitted? (profile {})))
+         "email_verified の無い正規メンバーが弾かれている"))))
+
+;; ───────────── 拒否時に何を残すか ─────────────
 
 (deftest denied-session-holds-no-identity
-  (testing "拒否した相手の email や claim を保持しない"
-    (let [s (access/session (profile {:identity/email "someone@gmail.com"
-                                      :identity/claims {:hd "gmail.com"}}))]
-      (is (= :denied (:status s)))
-      (is (nil? (:email s)))
-      (is (nil? (:display-name s)))
-      (is (not (contains? s :identity/claims)))
-      (is (not (re-find #"gmail" (pr-str s)))
-          "拒否理由の表示に相手のアドレスが混ざっている"))))
+  (configured
+   (let [s (access/session
+            (with-claims (profile {:identity/email "outsider@example.com"}) :acct 1))]
+     (is (= :denied (:status s)))
+     (is (nil? (:email s)))
+     (is (not (re-find #"outsider" (pr-str s)))))))
 
 (deftest denial-message-never-hints-at-what-would-pass
-  (testing "メッセージは次の行動を示すが、通過条件の総当たり手がかりは出さない"
-    (doseq [[_ msg] access/denial-message]
-      (is (not (re-find #"hd|claim|verified|policy|rule" msg))
-          (str "内部条件名が利用者向けメッセージに漏れている: " msg)))))
+  (doseq [[_ msg] access/denial-message]
+    (is (not (re-find #"tid|claim|issuer|policy|rule|guest\b" msg))
+        (str "内部条件名が利用者向けメッセージに漏れている: " msg))))
 
-;; ───────────────── 監査に載る形か ─────────────────
+;; ───────────── ドメイン連動のアカウント発行 ─────────────
 
-(deftest decision-is-a-well-formed-authorization-decision
-  (let [d (access/decide (profile {}))]
-    (is (= :allow (:authz.decision/decision d)))
-    (is (= "local-itonami.access" (:authz.decision/by d)))
-    (is (= "local-itonami/domain-admission" (:authz.decision/policy-ref d)))
-    (is (some? (:authz.decision/effect-trace d))))
+(deftest provisions-an-account-for-an-admitted-member
+  (configured
+   (let [p (access/provision (profile {}))]
+     (is (true? (:provision? p)))
+     (is (= "gftdcojp" (:org p)))
+     (is (= "gftdcojp" (:repo p)))
+     (is (= "oid-1" (:actor p)) "actor id は不変の oid でなければならない")
+     (is (= "Jun Kawasaki" (:actor-name p)))
+     (is (= :contributor (:role p)))
+     (is (= tenant (get-in p [:provenance :tenant-id]))))))
 
-  (testing "deny には必ず reason がある(authorization.core が強制する)"
-    (let [d (access/decide (profile {:identity/email "x@example.com"}))]
-      (is (= :deny (:authz.decision/decision d)))
-      (is (some? (:authz.decision/reason d)))))
+(deftest provisioned-members-cannot-approve
+  (testing "サインインできることと、:financial / :external-send を承認して
+            よいことは別"
+    (is (not (contains? access/member-capabilities :effect/approve)))
+    (is (not (contains? access/member-capabilities :admin)))
+    (is (= #{:queue/read :effect/propose :audit/read} access/member-capabilities))))
 
-  (testing "request-id は決定的 — 同じ principal なら同じ id"
-    (is (= (:authz.decision/request-id (access/decide (profile {})))
-           (:authz.decision/request-id (access/decide (profile {}))))))
+(deftest never-provisions-for-a-denied-profile
+  (testing "組織未設定"
+    (is (false? (:provision? (access/provision (profile {}))))))
+  (configured
+   (testing "別テナント"
+     (let [p (access/provision (with-claims (profile {}) :tid other-tenant))]
+       (is (false? (:provision? p)))
+       (is (= :different-organization (:reason p)))))
+   (testing "ゲスト"
+     (is (false? (:provision? (access/provision
+                               (with-claims (profile {:identity/email "o@example.com"})
+                                            :acct 1))))))
+   (testing "oid が無ければ発行しない — 安定した actor id が作れない"
+     (let [p (access/provision (update (profile {}) :identity/claims dissoc :oid))]
+       (is (false? (:provision? p)))
+       (is (= :no-stable-user-id (:reason p)))))))
 
-  (testing "呼び出し側が相関 id を渡せる"
-    (is (= "corr-1" (:authz.decision/request-id
-                     (access/decide (profile {}) "corr-1"))))))
+(deftest actor-id-is-stable-across-a-rename
+  (configured
+   (testing "メールが変わっても actor は同じ"
+     (is (= (:actor (access/provision (profile {})))
+            (:actor (access/provision
+                     (-> (profile {:identity/email "jun.kawasaki@gftd.co.jp"})
+                         (assoc-in [:identity/claims :preferred_username]
+                                   "jun.kawasaki@gftd.co.jp")))))))))

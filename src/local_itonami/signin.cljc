@@ -1,5 +1,10 @@
 (ns local-itonami.signin
-  "Google Workspace OIDC サインインの**判断層**。1回だけ書く、portable。
+  "Microsoft Entra ID (Microsoft 365) OIDC サインインの**判断層**。
+  1回だけ書く、portable。
+
+  gftd.co.jp は Outlook / M365 で取得されたドメインなので IdP は Entra ID。
+  Google の `hd` claim は存在せず、組織の正本は `tid`（テナント GUID）—
+  詳細は `local-itonami.access` の ns docstring を参照。
 
   ## host provider を何語で書くか — の答え
 
@@ -205,17 +210,27 @@
 
 (defn- claims->profile
   "検証済み claims を `authentication.identity/normalized-profile` にする。
-  `:hd` を `:identity/claims` に載せるのは、`local-itonami.access` が
-  hosted domain を見るため。"
+
+  Entra ID 固有の点:
+  - **`sub` ではなく `oid` が不変のユーザー識別子。** `sub` はアプリごとに
+    pairwise で変わるので、アカウント発行の actor id には使えない
+    （`access/actor-id` は `oid` を見る）。
+  - メールは `email` に入るとは限らず `preferred_username` / `upn` のことも
+    ある。どれも検証済みの保証は無いので、そのまま claims に渡して
+    `access` 側に判断させる。
+  - **`email_verified` は既定で発行されない**ので要求しない。
+
+  `access` が読む claim（`tid`/`iss`/`oid`/`acct`/`preferred_username`/`upn`）を
+  そのまま渡す。ここで判定はしない。"
   [claims]
   (identity/normalized-profile
-   {:provider :google
-    :provider-subject (:sub claims)
-    :email (:email claims)
-    :email-verified? (true? (:email_verified claims))
+   {:provider :microsoft
+    :provider-subject (or (:oid claims) (:sub claims))
+    :email (or (:email claims) (:preferred_username claims) (:upn claims))
+    :email-verified? false
     :display-name (:name claims)
-    :avatar-url (:picture claims)
-    :claims (select-keys claims [:iss :aud :hd])}))
+    :claims (select-keys claims [:iss :aud :tid :oid :acct
+                                 :preferred_username :upn])}))
 
 (defn complete
   "token response の ID token を検証し、アクセス判定まで通す。

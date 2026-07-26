@@ -5,7 +5,10 @@
   (:require #?(:clj [clojure.test :refer [deftest is testing]]
                :cljs [cljs.test :refer-macros [deftest is testing]])
             [clojure.string :as str]
+            [local-itonami.access :as access]
             [local-itonami.signin :as signin]))
+
+(def ^:private tenant "11111111-2222-3333-4444-555555555555")
 
 ;; ───────────────────────── 注入する偽 capability ─────────────────────────
 
@@ -147,18 +150,23 @@
 ;; ───────── 署名 OK でも claims 検証とドメイン判定を必ず通る ─────────
 
 (defn- complete-with [claims]
-  (signin/complete {:id-token "a.b.c"
-                    :json-read (constantly claims)
-                    :verify-signature-fn (constantly true)
-                    :issuer "https://accounts.google.com"
-                    :audience "cid" :nonce "n1" :now 1000}))
+  (binding [access/*tenant-id* tenant]
+    (signin/complete {:id-token "a.b.c"
+                      :json-read (constantly claims)
+                      :verify-signature-fn (constantly true)
+                      :issuer (access/tenant-issuer tenant)
+                      :audience "cid" :nonce "n1" :now 1000})))
 
 (def ^:private good-claims
-  {:iss "https://accounts.google.com" :aud "cid" :nonce "n1"
-   :sub "sub-1" :email "jun@gftd.co.jp" :email_verified true
-   :name "Jun Kawasaki" :hd "gftd.co.jp" :exp 9999999999 :iat 1})
+  "Entra ID v2.0 の ID token claims。`hd` も `email_verified` も無い —
+  Entra はどちらも出さない。組織の正本は `tid`。"
+  {:iss (str "https://login.microsoftonline.com/" tenant "/v2.0")
+   :aud "cid" :nonce "n1"
+   :sub "pairwise-sub" :oid "oid-1" :tid tenant :acct 0
+   :preferred_username "jun@gftd.co.jp" :email "jun@gftd.co.jp"
+   :name "Jun Kawasaki" :exp 9999999999 :iat 1})
 
-(deftest a-fully-valid-google-workspace-token-is-admitted
+(deftest a-fully-valid-entra-tenant-token-is-admitted
   (let [r (complete-with good-claims)]
     (is (= :admitted (:status r)))
     (is (= "jun@gftd.co.jp" (:email r)))))
@@ -166,7 +174,7 @@
 (deftest claims-validation-still-applies
   (testing "issuer 不一致"
     (is (= :invalid-id-token-claims
-           (:reason (complete-with (assoc good-claims :iss "https://evil.example"))))))
+           (:reason (complete-with (assoc good-claims :iss "https://evil.example/v2.0"))))))
   (testing "audience 不一致 — 別クライアント向けのトークンの使い回しを拒否"
     (is (= :invalid-id-token-claims
            (:reason (complete-with (assoc good-claims :aud "other-client"))))))
@@ -177,12 +185,25 @@
     (is (= :invalid-id-token-claims
            (:reason (complete-with (assoc good-claims :nonce "other")))))))
 
-(deftest domain-admission-still-applies-after-a-valid-token
-  (testing "署名も claims も正しいが gftd.co.jp ではない"
-    (let [r (complete-with (assoc good-claims :email "x@gmail.com" :hd nil))]
+(deftest organization-admission-still-applies-after-a-valid-token
+  (testing "署名も claims も正しいが別テナント"
+    (let [r (complete-with (assoc good-claims :tid "99999999-0000-0000-0000-000000000000"))]
+      (is (= :denied (:status r)))))
+  (testing "テナント内の B2B ゲスト"
+    (let [r (complete-with (assoc good-claims :acct 1
+                                  :preferred_username "outsider@example.com"
+                                  :email "outsider@example.com"))]
       (is (= :denied (:status r)))
       (is (nil? (:email r)) "拒否したのに相手の identity を持っている")))
-  (testing "email は gftd だが hd claim が無い(個人アカウントの詐称)"
-    (is (= :denied (:status (complete-with (dissoc good-claims :hd))))))
-  (testing "email が未検証"
-    (is (= :denied (:status (complete-with (assoc good-claims :email_verified false)))))))
+  (testing "tid claim が無い"
+    (is (= :denied (:status (complete-with (dissoc good-claims :tid)))))))
+
+(deftest oid-not-sub-becomes-the-account-identity
+  (testing "sub はアプリごとに pairwise で変わるので actor id に使えない"
+    (binding [access/*tenant-id* tenant]
+      (let [p (access/provision
+               {:identity/provider :microsoft
+                :identity/email "jun@gftd.co.jp"
+                :identity/claims (select-keys good-claims
+                                              [:iss :aud :tid :oid :acct :preferred_username])})]
+        (is (= "oid-1" (:actor p)))))))

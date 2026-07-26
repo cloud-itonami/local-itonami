@@ -64,12 +64,22 @@
 
 ;; ───────────────────────── サインイン ─────────────────────────
 
-(def config
-  "app.kotoba.edn の :api / IdP 設定に対応。client-id は公開値（秘密ではない）。
-  client secret は native 側にしか置かない。"
-  {:authorize-endpoint "https://accounts.google.com/o/oauth2/v2/auth"
-   :redirect-uri "jp.co.gftd.itonami:/oauth2redirect"
-   :hd access/allowed-domain})
+(defn tenant-id
+  "Entra テナント GUID。host が window に載せる。**既定を持たない** —
+  未設定なら access が誰も通さない。"
+  []
+  (some-> (aget js/window "ITONAMI_ENTRA_TENANT_ID") str not-empty))
+
+(defn config
+  "Entra ID v2.0 の authorize endpoint はテナントごと。`common` は使わない —
+  使うと任意の Microsoft アカウントがサインイン画面を通れてしまい、拒否が
+  ID token 検証まで遅れる（最終判定は access が tid で行うので破綻はしないが、
+  部外者に無駄な同意画面を見せることになる）。"
+  []
+  (let [tid (tenant-id)]
+    {:authorize-endpoint (str "https://login.microsoftonline.com/" tid
+                              "/oauth2/v2.0/authorize")
+     :redirect-uri "jp.co.gftd.itonami:/oauth2redirect"}))
 
 (defn- signin-failed [reason message]
   {:status :denied :reason reason :message message})
@@ -81,12 +91,20 @@
   `signin/complete`）はまだ配線していない。**できたふりをしない**ので、
   callback を受け取れたところで『続きは未配線』と表示して止まる。"
   []
-  (let [client-id (or (aget js/window "ITONAMI_OIDC_CLIENT_ID") "")]
-    (if (str/blank? client-id)
+  (let [client-id (or (aget js/window "ITONAMI_OIDC_CLIENT_ID") "")
+        tid (tenant-id)]
+    (cond
+      (str/blank? client-id)
       (update-state! assoc :session
-                     (signin-failed :no-client-id
-                                    "OIDC クライアント ID が未設定です。"))
-      (-> (provider/begin-async (assoc config :client-id client-id))
+                     (signin-failed :no-client-id "OIDC クライアント ID が未設定です。"))
+
+      (nil? tid)
+      (update-state! assoc :session
+                     (signin-failed :organization-not-configured
+                                    "組織が未設定のため利用できません。"))
+
+      :else
+      (-> (provider/begin-async (assoc (config) :client-id client-id))
           (.then (fn [{:keys [url pending]}]
                    (swap! state assoc :pending-signin pending)
                    (-> (provider/request-authorization! url)
