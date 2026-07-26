@@ -1,0 +1,38 @@
+{:app/id "jp.co.gftd.itonami"
+ :app/name "itonami"
+ :app/version "0.1.0"
+ :macos/bundle-id "jp.co.gftd.itonami"
+ :ios/bundle-id "jp.co.gftd.itonami"
+
+ ;; The native host and surface belong to kotoba-lang/shell. This is not a
+ ;; Tauri/WebView bundle entry: no React bundle and no system WebView content
+ ;; is shipped in the native runtime. Same shape as local-manimani's manifest.
+ ;;
+ ;; NOTE on the render substrate: kotoba-lang/shell's README is explicit that
+ ;; what actually rasterises today is WKWebView (macOS/iOS) and
+ ;; android.webkit.WebView, NOT kotoba-lang/dom-gpu or kotoba-lang/browser
+ ;; (ADR-2607081015). :surface :kotoba/dom describes the operation vocabulary
+ ;; this app commits, which is real and honoured now; :browser-engine below
+ ;; is the documented long-term target, not a claim about today.
+ :runtime {:kind :kotoba-wasm
+           :entry "src/local_itonami/shell_app.cljc"
+           :namespace local-itonami.shell-app
+           :start start
+           :surface :kotoba/dom
+           :window {:width 420 :height 860 :min-width 380 :min-height 640}}
+
+ :ui {:kind :kotoba-dom
+      :view-model "local-itonami.view"
+      :skin :jp-go-dds
+      :browser-engine :kotoba-lang/browser}
+
+ ;; Sessions are CACAO/did:key held by the host in the macOS Keychain. The
+ ;; app namespace never sees key material -- it receives an already-resolved
+ ;; :session. Service/account names match cloud-itonami's existing local
+ ;; surface so an operator who already signed in there is not re-prompted.
+ :macos/auth-bridge :keychain-cacao
+ :macos/keychain-service "dev.kotoba.itonami.auth"
+ :macos/keychain-account "gftdcojp-session"
+
+ :api {:base-url "https://itonami.cloud"
+       :tenant {:org "gftdcojp" :repo "gftdcojp"}}}
