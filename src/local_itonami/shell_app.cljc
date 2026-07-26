@@ -86,6 +86,7 @@
     :password   (org-signin/password-result state payload)
     :enrolled   (org-signin/enrolled state payload)
     :cancelled  (org-signin/cancelled state)
+    :rp-mismatch (org-signin/rp-mismatch state)
     :failed     (org-signin/failed state)
     state))
 

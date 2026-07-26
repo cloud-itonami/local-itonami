@@ -133,10 +133,31 @@
 
 ;; ───────────────────────── 3. パスキー ─────────────────────────
 
+(def rp-id
+  "パスキーが紐づく Relying Party。**この値を名乗れるのは、同じドメインから
+  配信されたページだけ**（WebAuthn の RP ID 制約）。"
+  "itonami.cloud")
+
+(defn passkey-possible-here?
+  "この origin から RP ID `itonami.cloud` のパスキーを作れるか。
+
+  作れるのは `itonami.cloud` そのものか、その登録可能サブドメインから配信
+  されたページだけ。このアプリは native では `kotoba-webbundle://`、開発時は
+  `localhost` なので **どちらも作れない** — 試す前に分かる。
+
+  試してから SecurityError を握るのでは『接続できませんでした』のような
+  無関係な失敗に見えるので、**先に判定して正しい導線を出す**。"
+  []
+  (let [h (str (.-hostname js/location))]
+    (or (= h rp-id) (.endsWith h (str "." rp-id)))))
+
 (defn ^:export createPasskey []
-  (if-not (exists? js/PublicKeyCredential)
-    (update-state! shell-app/apply-identity :enrolled
-                   {:ok false :error "この端末はパスキーに対応していません。"})
+  (if-not (passkey-possible-here?)
+    ;; WebView / localhost からは構造的に作れない。ブラウザへ渡す。
+    (update-state! shell-app/apply-identity :rp-mismatch nil)
+    (if-not (exists? js/PublicKeyCredential)
+      (update-state! shell-app/apply-identity :enrolled
+                     {:ok false :error "この端末はパスキーに対応していません。"})
     (let [s @state
           tenant (:org-signin/tenant s)
           email (:org-signin/email s)
@@ -175,11 +196,30 @@
                              :attestationObjectB64url (buf->b64url (aget resp "attestationObject"))}))))
           (.then (fn [r] (update-state! shell-app/apply-identity :enrolled r)))
           (.catch (fn [e]
-                    ;; 利用者が生体認証を取り消しただけのときは失敗にしない。
                     (let [n (when e (aget e "name"))]
-                      (if (or (= n "NotAllowedError") (= n "AbortError"))
+                      (cond
+                        ;; 利用者が生体認証を取り消しただけ。失敗にしない。
+                        (or (= n "NotAllowedError") (= n "AbortError"))
                         (update-state! shell-app/apply-identity :cancelled nil)
-                        (update-state! shell-app/apply-identity :failed nil)))))))))
+
+                        ;; RP ID がこの origin で使えない。**通信の失敗ではない**
+                        ;; ので、そう言わない（passkey-possible-here? で普通は
+                        ;; ここまで来ないが、来たときに誤診しないため）。
+                        (= n "SecurityError")
+                        (update-state! shell-app/apply-identity :rp-mismatch nil)
+
+                        :else
+                        (update-state! shell-app/apply-identity :failed nil))))))))))
+
+(defn ^:export openBrowserSignIn
+  "パスキー登録をシステムブラウザ（ASWebAuthenticationSession）で続ける。
+
+  native bridge が居ればそちらへ、居なければ普通に新しいタブで開く。"
+  []
+  (let [url (org-signin/passkey-origin-url @state)]
+    (if (provider/native-bridge-available?)
+      (provider/request-authorization! url)
+      (.open js/window url "_blank" "noopener"))))
 
 ;; ───────────────────────── boot ─────────────────────────
 
@@ -190,7 +230,8 @@
   (set! (.-itonami js/window)
         #js {:continueSignIn continueSignIn
              :submitPassword submitPassword
-             :createPasskey createPasskey})
+             :createPasskey createPasskey
+             :openBrowserSignIn openBrowserSignIn})
   (.addEventListener js/window session-event-name
                      (fn [e] (on-session (.-detail e))))
   ;; native bridge（Keychain の CACAO）が居れば保存済みセッションを問い合わせる。

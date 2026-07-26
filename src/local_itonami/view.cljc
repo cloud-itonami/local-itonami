@@ -253,6 +253,19 @@
       (action {:id "signin-passkey" :label "パスキーを作成" :fn-name "createPasskey"
                :busy? busy?}))
 
+     ;; WebAuthn の RP ID 制約でこの画面からは作れない（`org-signin/rp-mismatch`
+     ;; の docstring 参照）。**『失敗した』ではなく『続きはここ』と出す** —
+     ;; 利用者に直せない制約を失敗として見せない。
+     :passkey-elsewhere
+     (list
+      [:p {:class "itonami-empty"}
+       "パスキーはブラウザで作成します。アプリの画面は itonami.cloud 以外から"
+       "配信されているため、この画面では作成できません（セキュリティ上の仕様）。"]
+      (action {:id "signin-browser" :label "ブラウザで続ける"
+               :fn-name "openBrowserSignIn" :busy? busy?})
+      [:small {:class "itonami-field__hint"}
+       (str "作成後、このアプリに戻るとサインイン済みになります。")])
+
      :done
      (skin/card
       [:div {:class "itonami-metric"}

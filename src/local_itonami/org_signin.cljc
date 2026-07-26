@@ -32,7 +32,7 @@
 
   `:password` を飛ばして `:passkey` に入ることもある（既にパスキーがある
   アカウント）。段は一本道ではない。"
-  [:email :password :passkey :done])
+  [:email :password :passkey :passkey-elsewhere :done])
 
 (defn initial []
   {:org-signin/step :email
@@ -112,6 +112,36 @@
   "利用者が生体認証を取り消した。**失敗として扱わない。**"
   [s]
   (msg s "パスキーの作成を取り消しました。もう一度お試しください。" nil))
+
+(defn passkey-origin-url
+  "パスキー登録を完了させるためにブラウザで開く URL。"
+  [s]
+  (str "https://itonami.cloud/signin/"
+       (when-let [e (:org-signin/email s)] (str "?email=" e))))
+
+(defn rp-mismatch
+  "**この画面ではパスキーを作れない**（WebAuthn の RP ID 制約）。
+
+  実測 2026-07-26、`http://localhost:8781` から:
+
+    SecurityError :: The relying party ID is not a registrable domain
+    suffix of, nor equal to the current domain.
+
+  パスキーは RP ID（`itonami.cloud`）に紐づき、**その ID を名乗れるのは
+  同じドメインから配信されたページだけ**。このアプリは native では
+  `kotoba-webbundle://`、開発時は `localhost` から配信されるので、
+  どちらも該当しない。仕様上の制約で、JS で回避できるものではない。
+
+  したがって WebView の中でパスキーを作るのは**構造的に不可能**で、
+  正しい経路はシステムブラウザ（ASWebAuthenticationSession）で
+  `https://itonami.cloud/signin/` を開くこと。
+
+  これを『接続できませんでした』と表示していたのは誤りだった —
+  原因を隠し、利用者を通信の調査に向かわせる。"
+  [s]
+  (-> s
+      (assoc :org-signin/step :passkey-elsewhere)
+      (msg "この画面ではパスキーを作成できません。ブラウザで続けてください。" nil)))
 
 (defn failed
   "通信そのものの失敗。入力の誤りと混ぜない。"
