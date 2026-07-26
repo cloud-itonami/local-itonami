@@ -3,22 +3,34 @@
 
   SSR が書いた `index.html` の上に載って、状態が変わるたびに同じ
   `local-itonami.view/screen` を再描画する。**view も判断も共有**していて、
-  ここが持つのは DOM への反映と native bridge の受け口だけ。
+  ここが持つのは DOM への反映と HTTP / WebAuthn の呼び出しだけ。
 
   reagent を入れていないのは意図的: view は純 hiccup なので
   `html.core/->html` で文字列にして差し替えれば足り、SSR と完全に同じ経路を
-  通る（描画差の原因を1つ減らす）。差分更新が要るほど大きい画面ではない。"
-  (:require [clojure.string :as str]
-            [html.core :as html]
-            [local-itonami.access :as access]
+  通る（描画差の原因を1つ減らす）。差分更新が要るほど大きい画面ではない。
+
+  ## サインインは cloud-itonami 自身が提供する（ADR-2607262300）
+
+  以前ここには Microsoft Entra ID の OIDC 一式（`signin` / `access` /
+  `discovery` / `onboarding`）が入っていた。cloud-itonami が自前で identity を
+  提供するようになったので、`/api/auth/*` を呼ぶだけになった。
+
+  **このファイルは『このアドレスは通してよいか』を一切判断しない** —
+  判断はサーバ（`cloud-itonami.edge.auth-endpoints`）、ここは状態の畳み込み
+  （`local-itonami.org-signin`）と描画だけ。両方に判定を置くと必ずずれて、
+  緩い側が穴になる。"
+  (:require [html.core :as html]
+            [local-itonami.org-signin :as org-signin]
             [local-itonami.provider :as provider]
             [local-itonami.shell-app :as shell-app]
-            [local-itonami.discovery :as discovery]
-            [local-itonami.onboarding :as onboarding]
-            [local-itonami.signin :as signin]
             [local-itonami.view :as view]))
 
 (defonce state (atom shell-app/initial-state))
+
+(def api-origin
+  "本番。WebView は `kotoba-webbundle://` スキームで読み込まれるので相対 URL が
+  使えない — 明示する。"
+  "https://itonami.cloud")
 
 (defn render!
   "state → DOM。`.itonami-app` を丸ごと差し替える（SSR が出したものと
@@ -30,6 +42,41 @@
 (defn update-state! [f & args]
   (apply swap! state f args)
   (render!))
+
+(defn- input-value [id]
+  (some-> (.getElementById js/document id) (.-value) str))
+
+(defn- post!
+  "keywordize した応答を返す Promise。
+
+  **HTTP の失敗と『通さない』を混ぜない** — 前者は `:failed`（接続できない）、
+  後者は応答の `:ok false`（資格が無い）。混ぜると、サーバが落ちているのか
+  自分の入力が悪いのか利用者に分からない。"
+  [path body]
+  (-> (js/fetch (str api-origin path)
+                #js {:method "POST"
+                     :headers #js {"content-type" "application/json"}
+                     :body (js/JSON.stringify (clj->js body))})
+      (.then (fn [r] (.then (.json r) (fn [j] (js->clj j :keywordize-keys true)))))))
+
+;; ───────────────────────── base64url ─────────────────────────
+
+(defn- b64url->buf [s]
+  (let [b64 (-> (str s)
+                (.replace (js/RegExp. "-" "g") "+")
+                (.replace (js/RegExp. "_" "g") "/"))
+        pad (case (mod (count b64) 4) 2 "==" 3 "=" "")
+        bin (js/atob (str b64 pad))
+        out (js/Uint8Array. (.-length bin))]
+    (dotimes [i (.-length bin)] (aset out i (.charCodeAt bin i)))
+    (.-buffer out)))
+
+(defn- buf->b64url [buf]
+  (let [bytes (js/Uint8Array. buf)]
+    (-> (js/btoa (.apply js/String.fromCharCode nil bytes))
+        (.replace (js/RegExp. "\\+" "g") "-")
+        (.replace (js/RegExp. "/" "g") "_")
+        (.replace (js/RegExp. "=+$") ""))))
 
 ;; ───────────────────────── native bridge の受け口 ─────────────────────────
 
@@ -43,161 +90,111 @@
   "itonami-auth-session")
 
 (defn on-session
-  "AppDelegate.swift の `dispatchSession` から CustomEvent 経由で届く。
+  "Keychain の保存済みセッションが CustomEvent 経由で届く。
 
-  Keychain に入っているのは既存の CACAO セッション（email + cacaoB64）で、
-  OIDC の profile ではない。**この経路では OIDC の hd claim を検証していない**
-  ので、`access/session` にそのまま渡してはいけない — 渡すと『Keychain に
-  何か入っていれば入れる』になり、ドメイン判定が実質無効化される。
-
-  したがってここでは復元したことだけを記録し、**認可は必ず
-  `local-itonami.signin/complete` を通った結果を使う**。Keychain の中身を
-  信頼して admit する経路は作らない。"
+  **復元できたことは認可の証拠ではない。** Keychain に何か入っていれば入れる、
+  にすると保存物を信頼した認可になる。ここでは『サインインし直してください』
+  を出すだけで、業務データは描かない。"
   [detail]
   (let [email (some-> detail (aget "email"))]
     (update-state!
      (fn [s]
        (if email
-         ;; 復元はできたが、これは認可の証拠ではない。
-         (assoc s :session {:status :denied
-                            :reason :reauthentication-required
-                            :message "サインインし直してください。"})
-         (assoc s :session nil))))))
+         (-> s
+             (assoc :org-signin/email email :org-signin/step :email)
+             (assoc :org-signin/message "サインインし直してください。"
+                    :org-signin/tone nil))
+         s)))))
 
-;; ───────────────────────── サインイン ─────────────────────────
+;; ───────────────────────── 1. 組織の判別 ─────────────────────────
 
-(defn resolve-organization!
-  "ドメインから組織テナントを引いて state と access に反映する。
-  **資格情報も DNS も要らない** — これが domain 連動の1段目。"
-  []
-  (let [{:keys [url parse]} (onboarding/discovery-request (onboarding/domain-of-record))]
-    (-> (provider/http-get-json url)
-        (.then (fn [doc]
-                 (let [r (parse (js->clj doc))]
-                   (when (:ok? r)
-                     (set! access/*tenant-id* (:tenant-id r)))
-                   (update-state! assoc
-                                  :discovery r
-                                  :setup (onboarding/plan-for-this-app r))
-                   r)))
-        (.catch (fn [e]
-                  (let [r {:ok? false :error :discovery-failed
-                           :detail (.-message e)}]
-                    (update-state! assoc :discovery r
-                                   :setup (onboarding/plan-for-this-app r))
-                    r))))))
+(defn ^:export continueSignIn []
+  (let [next-state (org-signin/submit-email @state (input-value "signin-email"))]
+    (reset! state next-state)
+    (render!)
+    ;; 形で弾かれたら通信しない。
+    (when (:org-signin/busy? next-state)
+      (-> (post! "/api/auth/discover" {:email (:org-signin/email next-state)})
+          (.then (fn [r] (update-state! shell-app/apply-identity :discovered r)))
+          (.catch (fn [_] (update-state! shell-app/apply-identity :failed nil)))))))
 
-(defn- client-id [] (or (aget js/window "ITONAMI_OIDC_CLIENT_ID") ""))
+;; ───────────────────────── 2. 初期パスワード ─────────────────────────
 
-(defn- signin-failed [reason message]
-  {:status :denied :reason reason :message message})
+(defn ^:export submitPassword []
+  (let [pw (input-value "signin-password")]
+    (if (empty? pw)
+      (update-state! shell-app/apply-identity :password
+                     {:ok false :error "初期パスワードを入力してください。"})
+      (do
+        (update-state! org-signin/busy)
+        (-> (post! "/api/auth/password" {:email (:org-signin/email @state) :password pw})
+            (.then (fn [r] (update-state! shell-app/apply-identity :password r)))
+            (.catch (fn [_] (update-state! shell-app/apply-identity :failed nil))))))))
 
-(defn- exchange-and-complete!
-  "code → token → 署名検証(機構) → claims 検証 + 組織判定(判断)。
+;; ───────────────────────── 3. パスキー ─────────────────────────
 
-  署名検証は WebCrypto が非同期に行い、その **結果(boolean)** を
-  `signin/complete` に渡す。判断層に Promise を持ち込まない。"
-  [{:keys [code discovery pending]}]
-  (let [{:keys [token-endpoint jwks-uri issuer]} discovery
-        json-read #(js->clj (js/JSON.parse %) :keywordize-keys true)]
-    (-> (provider/http-post-form
-         token-endpoint
-         (signin/token-request {:code code
-                                :client-id (client-id)
-                                :redirect-uri onboarding/redirect-uri
-                                :code-verifier (:code-verifier pending)}))
-        (.then (fn [{:keys [status body]}]
-                 (when-not (= 200 status)
-                   (throw (js/Error. (str "token endpoint が " status " を返しました"))))
-                 (let [id-token (aget (js/JSON.parse body) "id_token")]
-                   (when (str/blank? (str id-token))
-                     (throw (js/Error. "ID token がありません")))
-                   (-> (provider/http-get-json jwks-uri)
-                       (.then (fn [jwks] {:id-token id-token :jwks jwks}))))))
-        (.then (fn [{:keys [id-token jwks]}]
-                 ;; header は署名検証前なので「どの鍵か」のヒントにしか使わない。
-                 ;; 鍵そのものは JWKS(TLS で取得)から来る。
-                 (let [{:keys [signing-input signature kid alg]}
-                       (signin/signing-input-and-signature id-token json-read)
-                       jwk (provider/jwk-for jwks kid)]
-                   (if-not (and signing-input jwk)
-                     {:id-token id-token :verified? false}
-                     (-> (provider/verify-jwt-signature signing-input signature jwk alg)
-                         (.then (fn [ok] {:id-token id-token :verified? ok})))))))
-        (.then (fn [{:keys [id-token verified?]}]
-                 (binding [access/*tenant-id* (:tenant-id discovery)]
-                   (signin/complete
-                    {:id-token id-token
-                     :json-read json-read
-                     :signature-verified? verified?
-                     :issuer issuer
-                     :audience (client-id)
-                     :nonce (:nonce pending)})))))))
-
-(defn ^:export beginSignIn
-  "サインイン開始 → ASWebAuthenticationSession → callback 照合 → token 交換。"
-  []
-  (let [cid (client-id)]
-    (cond
-      (str/blank? cid)
-      (update-state! assoc :session
-                     (signin-failed :no-client-id "OIDC クライアント ID が未設定です。"))
-
-      (not (:ok? (:discovery @state)))
-      (update-state! assoc :session
-                     (signin-failed :organization-not-configured
-                                    "組織テナントを特定できていません。"))
-
-      :else
-      (let [{:keys [authorize-endpoint]} (:discovery @state)]
-        (-> (provider/begin-async {:authorize-endpoint authorize-endpoint
-                                   :client-id cid
-                                   :redirect-uri onboarding/redirect-uri})
-            (.then (fn [{:keys [url pending]}]
-                     (swap! state assoc :pending-signin pending)
-                     (provider/request-authorization! url)))
-            (.then (fn [{:keys [ok? callback-url cancelled? error]}]
-                     (cond
-                       cancelled? (update-state! assoc :session nil)
-                       (not ok?) (update-state! assoc :session
-                                                (signin-failed :authorization-failed error))
-                       :else
-                       (let [q (provider/callback-url->query callback-url)
-                             r (signin/redirect->code q (:pending-signin @state))]
-                         (if-not (:ok? r)
-                           (update-state! assoc :session
-                                          (signin-failed (:error r)
-                                                         "サインインを検証できませんでした。"))
-                           (-> (exchange-and-complete!
-                                {:code (:code r)
-                                 :discovery (:discovery @state)
-                                 :pending (:pending-signin @state)})
-                               (.then #(update-state! assoc :session %))
-                               (.catch (fn [e]
-                                         (update-state! assoc :session
-                                                        (signin-failed
-                                                         :token-exchange-failed
-                                                         (str "サインインを完了できませんでした: "
-                                                              (.-message e)))))))))))) 
-            (.catch (fn [e]
-                      (update-state! assoc :session
-                                     (signin-failed :signin-failed
-                                                    (str "サインインを開始できませんでした: "
-                                                         (.-message e)))))))))))
+(defn ^:export createPasskey []
+  (if-not (exists? js/PublicKeyCredential)
+    (update-state! shell-app/apply-identity :enrolled
+                   {:ok false :error "この端末はパスキーに対応していません。"})
+    (let [s @state
+          tenant (:org-signin/tenant s)
+          email (:org-signin/email s)
+          token (:org-signin/enrollment-token s)]
+      (update-state! org-signin/busy)
+      (-> (post! "/api/webauthn/challenge"
+                 {:resources [(str "kotoba://itonami/" tenant "/enroll")]})
+          (.then (fn [r]
+                   (when-not (:ok r) (throw (js/Error. "challenge failed")))
+                   (.create js/navigator.credentials
+                            #js {:publicKey
+                                 #js {:challenge (b64url->buf (:challenge r))
+                                      :rp #js {:name "cloud-itonami" :id "itonami.cloud"}
+                                      ;; user.id にアドレスそのものを入れない。
+                                      ;; 本人の特定は引換券でサーバが行う。
+                                      :user #js {:id (b64url->buf
+                                                      (buf->b64url
+                                                       (.-buffer (.encode (js/TextEncoder.) (str tenant)))))
+                                                 :name email
+                                                 :displayName email}
+                                      :pubKeyCredParams #js [#js {:type "public-key" :alg -7}]
+                                      :authenticatorSelection #js {:residentKey "preferred"
+                                                                   :userVerification "preferred"}
+                                      :timeout 120000
+                                      :attestation "none"}})))
+          (.then (fn [cred]
+                   ;; `.-rawId` / `.-response` のような dot-property は
+                   ;; **:advanced で改名されて実行時に壊れる**（PublicKeyCredential は
+                   ;; Closure の externs が完全には覆っていない外部オブジェクト）。
+                   ;; ビルドが :infer-warning で教えてくれたので aget にする。
+                   (let [resp (aget cred "response")]
+                     (post! "/api/auth/enroll-passkey"
+                            {:enrollmentToken token
+                             :credentialIdB64url (buf->b64url (aget cred "rawId"))
+                             :clientDataJsonB64url (buf->b64url (aget resp "clientDataJSON"))
+                             :attestationObjectB64url (buf->b64url (aget resp "attestationObject"))}))))
+          (.then (fn [r] (update-state! shell-app/apply-identity :enrolled r)))
+          (.catch (fn [e]
+                    ;; 利用者が生体認証を取り消しただけのときは失敗にしない。
+                    (let [n (when e (aget e "name"))]
+                      (if (or (= n "NotAllowedError") (= n "AbortError"))
+                        (update-state! shell-app/apply-identity :cancelled nil)
+                        (update-state! shell-app/apply-identity :failed nil)))))))))
 
 ;; ───────────────────────── boot ─────────────────────────
 
 (defn ^:export init []
-  ;; 画面のボタンから呼べるように、サインイン開始だけは window に出す。
-  (set! (.-itonami js/window) #js {:beginSignIn beginSignIn})
+  ;; 画面のボタンから呼べるように window に出す。SSR だけの状態では
+  ;; window.itonami が無いので押しても何も起きない —— このボタンが動くこと
+  ;; 自体が『WebView 内で cljs が生きている』の観測点になる。
+  (set! (.-itonami js/window)
+        #js {:continueSignIn continueSignIn
+             :submitPassword submitPassword
+             :createPasskey createPasskey})
   (.addEventListener js/window session-event-name
                      (fn [e] (on-session (.-detail e))))
-  ;; native bridge が居るなら保存済みセッションを問い合わせる。ブラウザで
-  ;; 開いたときは居ないので、未サインインのまま描画する。
-  (if (provider/native-bridge-available?)
-    (provider/request-session!)
-    (update-state! assoc :session nil))
-  ;; ドメイン連動: 起動と同時にテナントを引く。ここは資格情報を要さないので
-  ;; サインイン前に完了できる。
-  (resolve-organization!)
+  ;; native bridge（Keychain の CACAO）が居れば保存済みセッションを問い合わせる。
+  ;; ブラウザで開いたときは居ないので、未サインインのまま描画する。
+  (when (provider/native-bridge-available?)
+    (provider/request-session!))
   (render!))

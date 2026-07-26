@@ -67,6 +67,25 @@
    "color:var(--hig-color-secondary-label)}"
    ".itonami-effect__id{font-family:var(--hig-font-mono)}"
    ".itonami-empty{color:var(--hig-color-secondary-label)}"
+   ;; サインインの入力欄。**44px 下限は指で押せる最小寸法（HIG）**なので
+   ;; 削らない — このアプリは iOS でも動く。
+   ".itonami-field{display:flex;flex-direction:column;gap:0.25rem;"
+   "margin-block:0.75rem}"
+   ".itonami-field__label{color:var(--hig-color-secondary-label)}"
+   ".itonami-field__input{width:100%;box-sizing:border-box;min-height:44px;"
+   "padding:0.5rem 0.75rem;border-radius:0.5rem;"
+   "border:1px solid var(--hig-color-separator);"
+   "background:var(--hig-color-system-background);"
+   "color:var(--hig-color-label)}"
+   ;; focus ring は消さない（kotoba-uiux rule 7）。
+   ".itonami-field__input:focus-visible{outline:2px solid var(--hig-color-tint);"
+   "outline-offset:2px}"
+   ".itonami-field__hint{color:var(--hig-color-tertiary-label)}"
+   ".itonami-action{width:100%;min-height:44px;border:none;border-radius:0.5rem;"
+   "padding:0.5rem 1rem;font-weight:700;cursor:pointer;"
+   "background:var(--hig-color-tint);color:var(--hig-color-system-background)}"
+   ;; 通信中は押せない。二重送信で引換券が2枚出ると片方が宙に浮く。
+   ".itonami-action[disabled]{opacity:0.5;cursor:progress}"
    ".itonami-signin-button{margin-top:1rem}"
    ".itonami-chip--warning{color:var(--hig-palette-red)}"
    ".itonami-steps{display:flex;flex-direction:column;gap:0.5rem}"

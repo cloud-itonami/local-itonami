@@ -1,5 +1,15 @@
 (ns local-itonami.signin
   "Microsoft Entra ID (Microsoft 365) OIDC サインインの**判断層**。
+
+  ⚠ **SUPERSEDED（2026-07-26、ADR-2607262300）**: cloud-itonami が自前で
+  identity を提供するようになったため、この ns は live な経路から外れた。
+  現行のサインインは `local-itonami.org-signin` +
+  `cloud-itonami.edge.auth-endpoints`（`/api/auth/*`）。ここに残して
+  あるのは実測で得た知見（Entra の tid/issuer 判定、ドメインからの
+  テナント discovery、ワンクリック登録で実際に必要だった手続き）で、
+  Entra 連携を再開する日が来たときの出発点になる。**新しいコードから
+  この ns を require しない。**
+
   1回だけ書く、portable。
 
   gftd.co.jp は Outlook / M365 で取得されたドメインなので IdP は Entra ID。

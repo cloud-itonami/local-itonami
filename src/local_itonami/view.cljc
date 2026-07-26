@@ -28,7 +28,7 @@
   keeps them honest is the API contract itself (`/api/{org}/{repo}/…`), not a
   shared render path."
   (:require [clojure.string :as str]
-            [local-itonami.access :as access]
+            [local-itonami.org-signin :as org-signin]
             [local-itonami.skin :as skin]))
 
 ;; ───────────────────────── formatting ─────────────────────────
@@ -181,40 +181,90 @@
        (empty? pending) [:p {:class "itonami-empty"} "承認待ちはありません。"]
        :else (into [:div {:class "itonami-effects"}] (map effect-row pending))))))
 
-(defn sign-in-section
-  "サインイン状態。
+(defn- field
+  "ラベル + 入力。**skin-neutral** — `dads-*` を書かない。"
+  [{:keys [id label type autocomplete placeholder hint disabled?]}]
+  [:div {:class "itonami-field"}
+   [:label {:class "itonami-field__label" :for id} label]
+   [:input (cond-> {:class "itonami-field__input" :id id :type (or type "text")
+                    :autocomplete (or autocomplete "off")}
+             placeholder (assoc :placeholder placeholder)
+             disabled? (assoc :disabled "disabled"))]
+   (when hint [:small {:class "itonami-field__hint"} hint])])
 
-  `local-itonami.access` が deny を返したときは**理由だけ**を出す
-  （access/session は拒否時に相手の identity を保持しない）。"
-  [session]
-  (case (:status session)
-    :admitted
-    (skin/section
-     (skin/heading 2 "サインイン")
+(defn- action
+  "主ボタン。`onclick` は cljs バンドル(`local-itonami.app`)が
+  `window.itonami` に載せた関数を呼ぶ。SSR だけの状態で押しても何も起き
+  ないので、**このボタンが動くこと自体が『WebView 内で cljs が生きている』
+  の観測点**でもある。"
+  [{:keys [id label fn-name busy?]}]
+  [:button (cond-> {:class "itonami-action" :id id :type "button"
+                    :onclick (str "window.itonami && window.itonami." fn-name "()")}
+             busy? (assoc :disabled "disabled"))
+   (if busy? "…" label)])
+
+(defn sign-in-section
+  "組織サインイン（ADR-2607262300）。メールアドレスから組織を判別し、
+  初期パスワードをパスキーに引き換える。
+
+  **段ごとに1つの入力しか出さない。** アドレスを入れる前にパスワード欄が
+  あると、どの組織のどの方式で認証するのかが決まる前に利用者が入力を始めて
+  しまう。
+
+  判断は全てサーバ側（`cloud-itonami.edge.auth-endpoints`）。ここは
+  `local-itonami.org-signin` が畳んだ状態を描くだけで、ドメイン検査などを
+  自前で持たない — 持つと同じ規則が2箇所に書かれて必ずずれる。"
+  [{:org-signin/keys [step email org domain message tone busy?] :as s}]
+  (skin/section
+   (skin/heading 2 "サインイン")
+   (when (and org domain)
+     (skin/card
+      [:div {:class "itonami-metric"}
+       [:span {:class "itonami-metric__label"} "組織"]
+       [:strong {:class "itonami-metric__value itonami-metric__value--sm"} org]
+       [:small {:class "itonami-metric__detail"} domain]]))
+
+   (case step
+     :email
+     (list
+      [:p {:class "itonami-empty"}
+       "勤務先のメールアドレスを入力してください。組織は自動で判別されます。"]
+      (field {:id "signin-email" :label "メールアドレス" :type "email"
+              :autocomplete "username" :placeholder "you@example.co.jp"
+              :disabled? busy?})
+      (action {:id "signin-continue" :label "次へ" :fn-name "continueSignIn"
+               :busy? busy?}))
+
+     :password
+     (list
+      (field {:id "signin-password" :label "初期パスワード" :type "password"
+              ;; one-time-code: ブラウザに保存させない。1回で無効になるので、
+              ;; 保存されると次回『保存したのに入れない』になる。
+              :autocomplete "one-time-code"
+              :hint "管理者から受け取った初期パスワードです。この1回で無効になり、続けてパスキーを作成します。"
+              :disabled? busy?})
+      (action {:id "signin-submit" :label "サインイン" :fn-name "submitPassword"
+               :busy? busy?}))
+
+     :passkey
+     (list
+      [:p {:class "itonami-empty"}
+       "パスキーを作成します。次回からは、この端末の生体認証だけでサインインできます。"]
+      (action {:id "signin-passkey" :label "パスキーを作成" :fn-name "createPasskey"
+               :busy? busy?}))
+
+     :done
      (skin/card
       [:div {:class "itonami-metric"}
        [:span {:class "itonami-metric__label"} "アカウント"]
        [:strong {:class "itonami-metric__value itonami-metric__value--sm"}
-        (str (or (:display-name session) (:email session)))]
+        (str email)]
        [:small {:class "itonami-metric__detail"}
-        (str (:email session) " · " (:domain session))]]))
+        (str (org-signin/identity-line s))]])
 
-    :denied
-    (skin/section
-     (skin/heading 2 "サインイン")
-     (skin/notice (:message session) {:tone :error}))
+     nil)
 
-    (skin/section
-     (skin/heading 2 "サインイン")
-     [:p {:class "itonami-empty"}
-      (str access/allowed-domain " の組織アカウントでサインインしてください。")]
-     ;; onclick は cljs バンドル(local-itonami.app)が window.itonami に載せる。
-     ;; SSR だけの状態で押しても何も起きない = このボタンが動くこと自体が
-     ;; 「WebView 内で cljs が生きている」の観測点でもある。
-     [:button {:class "dads-button dads-button--solid-fill itonami-signin-button"
-               :type "button"
-               :onclick "window.itonami && window.itonami.beginSignIn()"}
-      "サインイン"])))
+   (when message (skin/notice message {:tone (or tone :info)}))))
 
 (defn setup-section
   "組織登録（ワンクリック）の状況。
@@ -252,8 +302,8 @@
   『空で描いておいてデータだけ出さない』にしないのは、空セクションが
   『アクセスできている / 単に0件』と読めてしまうため — 見えないことが
   そのまま『見せていない』の表明になる形にする。"
-  [{:keys [scope metrics effects status session setup] :as _state}]
-  (let [admitted? (= :admitted (:status session))
+  [{:keys [scope metrics effects status setup] :as state}]
+  (let [admitted? (org-signin/signed-in? state)
         by-lane (when effects (group-by lane-of effects))]
     [:div {:class "itonami-app"}
      (header scope)
@@ -261,7 +311,7 @@
       (when (= :error status)
         (skin/notice "itonami.cloud に接続できませんでした。" {:tone :error}))
       (setup-section setup)
-      (sign-in-section session)
+      (sign-in-section state)
       (when admitted?
         (list
          (metrics-section metrics status)
