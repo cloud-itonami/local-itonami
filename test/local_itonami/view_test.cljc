@@ -211,3 +211,34 @@
 
 (deftest setup-section-is-absent-until-discovery-has-run
   (is (nil? (view/setup-section nil))))
+
+;; ───────── WebAuthn の RP ID 制約（2026-07-26 実測）─────────
+;;
+;; localhost / kotoba-webbundle:// から配信されたページは RP ID
+;; `itonami.cloud` のパスキーを作れない（SecurityError）。**これを
+;; 『接続できませんでした』と表示していた**のが誤りだった —— 原因を隠し、
+;; 利用者を通信の調査に向かわせる。
+
+(deftest rp-mismatch-is-a-handoff-not-a-failure
+  (let [s (-> (org-signin/initial)
+              (org-signin/discovered {:ok true :org "gftd-co-jp"
+                                      :tenant "gftd-co-jp/gftd-co-jp" :domain "gftd.co.jp"})
+              (org-signin/password-result {:ok true :enrollmentToken "tok"})
+              (org-signin/rp-mismatch))
+        html (pr-str (view/screen (merge sample-state s)))]
+    (is (= :passkey-elsewhere (:org-signin/step s)))
+    (testing "ブラウザへの導線を出す"
+      (is (str/includes? html "ブラウザで続ける"))
+      (is (str/includes? html "openBrowserSignIn")))
+    (testing "通信の失敗として見せない"
+      (is (not (str/includes? html "接続できませんでした"))
+          "利用者に直せない仕様上の制約を、通信障害として表示している"))
+    (testing "まだサインインしていないので業務データは出ない"
+      (is (not (org-signin/signed-in? s)))
+      (is (not (str/includes? html "eff-1"))))))
+
+(deftest passkey-url-carries-the-address
+  (let [s (org-signin/submit-email (org-signin/initial) "J.Kawasaki@GFTD.co.jp")]
+    (is (= "https://itonami.cloud/signin/?email=j.kawasaki@gftd.co.jp"
+           (org-signin/passkey-origin-url s))
+        "ブラウザ側で入力し直させない")))
