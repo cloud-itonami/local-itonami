@@ -1,0 +1,148 @@
+(ns local-itonami.discovery-test
+  "ドメイン→テナント解決の契約テスト。
+
+  ここが破れると『任意のテナントを我々の組織にできる』ので、
+  改竄された discovery 文書を弾けるかが本体。"
+  (:require #?(:clj [clojure.test :refer [deftest is testing]]
+               :cljs [cljs.test :refer-macros [deftest is testing]])
+            [clojure.string :as str]
+            [local-itonami.discovery :as discovery]
+            [local-itonami.access :as access]
+            [local-itonami.onboarding :as onboarding]))
+
+(def ^:private tid "e9b32269-81a5-4d3a-bf94-048ba6770c99")
+(def ^:private other "99999999-8888-7777-6666-555555555555")
+
+(defn- doc
+  "実測した gftd.co.jp の discovery 文書の形（2026-07-26）。"
+  [overrides]
+  (merge {"issuer" (str "https://login.microsoftonline.com/" tid "/v2.0")
+          "authorization_endpoint" (str "https://login.microsoftonline.com/" tid "/oauth2/v2.0/authorize")
+          "token_endpoint" (str "https://login.microsoftonline.com/" tid "/oauth2/v2.0/token")
+          "jwks_uri" (str "https://login.microsoftonline.com/" tid "/discovery/v2.0/keys")}
+         overrides))
+
+;; ───────────────────────── URL 組み立て ─────────────────────────
+
+(deftest discovery-url-is-the-only-way-to-build-it
+  (is (= (str "https://login.microsoftonline.com/gftd.co.jp"
+              "/v2.0/.well-known/openid-configuration")
+         (discovery/discovery-url "gftd.co.jp")))
+  (testing "正規化される"
+    (is (= (discovery/discovery-url "gftd.co.jp")
+           (discovery/discovery-url "  GFTD.CO.JP  "))))
+  (testing "常に Microsoft のホスト"
+    (is (str/starts-with? (discovery/discovery-url "x.example")
+                          "https://login.microsoftonline.com/"))))
+
+;; ───────────────────────── 正常系 ─────────────────────────
+
+(deftest resolves-the-tenant-from-a-well-formed-document
+  (let [r (discovery/parse (doc {}))]
+    (is (true? (:ok? r)))
+    (is (= tid (:tenant-id r)))
+    (is (str/includes? (:token-endpoint r) tid))
+    (is (str/includes? (:jwks-uri r) tid))))
+
+(deftest keyword-keys-work-too
+  (is (= tid (:tenant-id (discovery/parse
+                          {:issuer (str "https://login.microsoftonline.com/" tid "/v2.0")
+                           :authorization_endpoint (str "https://login.microsoftonline.com/" tid "/oauth2/v2.0/authorize")
+                           :token_endpoint (str "https://login.microsoftonline.com/" tid "/oauth2/v2.0/token")
+                           :jwks_uri (str "https://login.microsoftonline.com/" tid "/discovery/v2.0/keys")})))))
+
+;; ───────────────────────── 改竄された文書を弾く ─────────────────────────
+
+(deftest rejects-a-document-whose-endpoints-disagree
+  (testing "token_endpoint だけ別テナントに差し替え"
+    (let [r (discovery/parse
+             (doc {"token_endpoint" (str "https://login.microsoftonline.com/" other "/oauth2/v2.0/token")}))]
+      (is (false? (:ok? r)))
+      (is (= :inconsistent-tenant-id (:error r)))))
+
+  (testing "jwks_uri だけ差し替え — 署名検証鍵の乗っ取りが一番効く場所"
+    (is (= :inconsistent-tenant-id
+           (:error (discovery/parse
+                    (doc {"jwks_uri" (str "https://login.microsoftonline.com/" other "/discovery/v2.0/keys")}))))))
+
+  (testing "authorization_endpoint だけ差し替え"
+    (is (= :inconsistent-tenant-id
+           (:error (discovery/parse
+                    (doc {"authorization_endpoint" (str "https://login.microsoftonline.com/" other "/oauth2/v2.0/authorize")})))))))
+
+(deftest rejects-non-microsoft-endpoints
+  (doseq [[k v] {"jwks_uri" (str "https://evil.example/" tid "/keys")
+                 "token_endpoint" (str "https://evil.example/" tid "/token")
+                 "issuer" (str "https://evil.example/" tid "/v2.0")}]
+    (is (= :non-microsoft-endpoint (:error (discovery/parse (doc {k v}))))
+        (str k " が Microsoft 以外でも通ってしまった")))
+
+  (testing "ホスト名の前方一致すり抜けを許さない"
+    (is (= :non-microsoft-endpoint
+           (:error (discovery/parse
+                    (doc {"jwks_uri" (str "https://login.microsoftonline.com.evil.example/" tid "/keys")})))))))
+
+(deftest rejects-incomplete-or-tenantless-documents
+  (doseq [k ["issuer" "authorization_endpoint" "token_endpoint" "jwks_uri"]]
+    (is (= :incomplete-discovery-document
+           (:error (discovery/parse (dissoc (doc {}) k))))
+        (str k " が無くても通ってしまった")))
+  (testing "GUID が無い（例: /common）"
+    (is (= :no-tenant-id
+           (:error (discovery/parse
+                    {"issuer" "https://login.microsoftonline.com/common/v2.0"
+                     "authorization_endpoint" "https://login.microsoftonline.com/common/oauth2/v2.0/authorize"
+                     "token_endpoint" "https://login.microsoftonline.com/common/oauth2/v2.0/token"
+                     "jwks_uri" "https://login.microsoftonline.com/common/discovery/v2.0/keys"})))))
+  (testing "issuer が tid の v2.0 issuer 形でない"
+    (is (= :issuer-mismatch
+           (:error (discovery/parse (doc {"issuer" (str "https://login.microsoftonline.com/" tid "/v1.0")})))))))
+
+;; ───────────────────────── 登録計画 ─────────────────────────
+
+(deftest plan-marks-dns-as-not-needed
+  (let [plan (onboarding/plan-for-this-app (discovery/parse (doc {})))
+        dns (first (filter #(= :dns (:id %)) (:steps plan)))]
+    (is (true? (:done? dns)))
+    (is (str/includes? (:detail dns) "不要"))
+    (testing "GoDaddy への書き込みを計画に含めない — MX が載っている本番ゾーン"
+      (is (not (str/includes? (pr-str plan) "godaddy")))
+      (is (not (str/includes? (pr-str plan) "upsert"))))))
+
+(deftest plan-does-not-claim-one-click-while-admin-consent-is-pending
+  (let [plan (onboarding/plan-for-this-app (discovery/parse (doc {})))]
+    (is (true? (:resolved? plan)))
+    (is (= tid (:tenant-id plan)))
+    (is (false? (onboarding/one-click? plan))
+        "管理者同意が要る段が残っているのにワンクリック扱いしている")
+    (is (= :register-app (:id (onboarding/next-action plan))))
+    (testing "その段は自動でないと明示されている"
+      (let [step (onboarding/next-action plan)]
+        (is (false? (:automatic? step)))
+        (is (some? (:requires step)))))))
+
+(deftest app-registration-is-single-tenant-and-secretless
+  (let [req (onboarding/entra-app-registration {:tenant-id tid})]
+    (is (= "AzureADMyOrg" (get-in req [:body :signInAudience]))
+        "multi-tenant にすると任意テナントが入口を通れてしまう")
+    (is (= [onboarding/redirect-uri] (get-in req [:body :publicClient :redirectUris])))
+    (is (true? (get-in req [:body :isFallbackPublicClient])))
+    (testing "client secret を持たない — native に同梱しても秘密にならない"
+      (is (not (str/includes? (str/lower-case (pr-str req)) "secret"))))
+    (testing "delegated scope のみ。テナントのデータを読む application 権限は求めない"
+      (is (every? #(= "Scope" (:type %))
+                  (get-in req [:body :requiredResourceAccess 0 :resourceAccess]))))
+    (testing "acct を optional claim として要求する — guest 判定の正本"
+      (is (some #(= "acct" (:name %)) (get-in req [:optional-claims :idToken]))))))
+
+(deftest unresolved-discovery-produces-no-registration-request
+  (let [plan (onboarding/plan-for-this-app {:ok? false :error :non-microsoft-endpoint})]
+    (is (false? (:resolved? plan)))
+    (is (nil? (:tenant-id plan)))
+    (is (nil? (:request (first (filter #(= :register-app (:id %)) (:steps plan)))))
+        "テナントが特定できていないのに登録リクエストを出している")))
+
+(deftest the-registered-domain-is-the-admitted-domain
+  (testing "引くドメインと許可するドメインが別々に設定できてはいけない"
+    (is (= (onboarding/domain-of-record)
+           access/allowed-domain))))

@@ -164,3 +164,18 @@
   (testing "未知の kind は捨てずに :workspace へ"
     (is (= :workspace (view/lane-of {:kind "future/kind"})))
     (is (= :workspace (view/lane-of {:kind nil})))))
+
+(deftest setup-section-never-claims-a-manual-step-is-automatic
+  (let [setup {:steps [{:id :resolve-tenant :label "組織テナントの特定"
+                        :automatic? true :done? true :detail "特定しました。"}
+                       {:id :register-app :label "Entra アプリ登録"
+                        :automatic? false :done? false
+                        :requires "Entra の管理者権限"
+                        :detail "管理者同意が要ります。"}]}
+        rendered (pr-str (view/setup-section setup))]
+    (is (str/includes? rendered "完了") "終わった段が完了と出ていない")
+    (is (str/includes? rendered "要操作") "管理者操作が要る段が自動扱いされている")
+    (is (str/includes? rendered "必要: Entra の管理者権限"))))
+
+(deftest setup-section-is-absent-until-discovery-has-run
+  (is (nil? (view/setup-section nil))))

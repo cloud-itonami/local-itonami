@@ -13,6 +13,8 @@
             [local-itonami.access :as access]
             [local-itonami.provider :as provider]
             [local-itonami.shell-app :as shell-app]
+            [local-itonami.discovery :as discovery]
+            [local-itonami.onboarding :as onboarding]
             [local-itonami.signin :as signin]
             [local-itonami.view :as view]))
 
@@ -64,79 +66,124 @@
 
 ;; ───────────────────────── サインイン ─────────────────────────
 
-(defn tenant-id
-  "Entra テナント GUID。host が window に載せる。**既定を持たない** —
-  未設定なら access が誰も通さない。"
+(defn resolve-organization!
+  "ドメインから組織テナントを引いて state と access に反映する。
+  **資格情報も DNS も要らない** — これが domain 連動の1段目。"
   []
-  (some-> (aget js/window "ITONAMI_ENTRA_TENANT_ID") str not-empty))
+  (let [{:keys [url parse]} (onboarding/discovery-request (onboarding/domain-of-record))]
+    (-> (provider/http-get-json url)
+        (.then (fn [doc]
+                 (let [r (parse (js->clj doc))]
+                   (when (:ok? r)
+                     (set! access/*tenant-id* (:tenant-id r)))
+                   (update-state! assoc
+                                  :discovery r
+                                  :setup (onboarding/plan-for-this-app r))
+                   r)))
+        (.catch (fn [e]
+                  (let [r {:ok? false :error :discovery-failed
+                           :detail (.-message e)}]
+                    (update-state! assoc :discovery r
+                                   :setup (onboarding/plan-for-this-app r))
+                    r))))))
 
-(defn config
-  "Entra ID v2.0 の authorize endpoint はテナントごと。`common` は使わない —
-  使うと任意の Microsoft アカウントがサインイン画面を通れてしまい、拒否が
-  ID token 検証まで遅れる（最終判定は access が tid で行うので破綻はしないが、
-  部外者に無駄な同意画面を見せることになる）。"
-  []
-  (let [tid (tenant-id)]
-    {:authorize-endpoint (str "https://login.microsoftonline.com/" tid
-                              "/oauth2/v2.0/authorize")
-     :redirect-uri "jp.co.gftd.itonami:/oauth2redirect"}))
+(defn- client-id [] (or (aget js/window "ITONAMI_OIDC_CLIENT_ID") ""))
 
 (defn- signin-failed [reason message]
   {:status :denied :reason reason :message message})
 
-(defn ^:export beginSignIn
-  "サインイン開始 → ASWebAuthenticationSession → callback 照合。
+(defn- exchange-and-complete!
+  "code → token → 署名検証(機構) → claims 検証 + 組織判定(判断)。
 
-  token 交換から先（`signin/token-request` → `http-post-form` → JWKS →
-  `signin/complete`）はまだ配線していない。**できたふりをしない**ので、
-  callback を受け取れたところで『続きは未配線』と表示して止まる。"
+  署名検証は WebCrypto が非同期に行い、その **結果(boolean)** を
+  `signin/complete` に渡す。判断層に Promise を持ち込まない。"
+  [{:keys [code discovery pending]}]
+  (let [{:keys [token-endpoint jwks-uri issuer]} discovery
+        json-read #(js->clj (js/JSON.parse %) :keywordize-keys true)]
+    (-> (provider/http-post-form
+         token-endpoint
+         (signin/token-request {:code code
+                                :client-id (client-id)
+                                :redirect-uri onboarding/redirect-uri
+                                :code-verifier (:code-verifier pending)}))
+        (.then (fn [{:keys [status body]}]
+                 (when-not (= 200 status)
+                   (throw (js/Error. (str "token endpoint が " status " を返しました"))))
+                 (let [id-token (aget (js/JSON.parse body) "id_token")]
+                   (when (str/blank? (str id-token))
+                     (throw (js/Error. "ID token がありません")))
+                   (-> (provider/http-get-json jwks-uri)
+                       (.then (fn [jwks] {:id-token id-token :jwks jwks}))))))
+        (.then (fn [{:keys [id-token jwks]}]
+                 ;; header は署名検証前なので「どの鍵か」のヒントにしか使わない。
+                 ;; 鍵そのものは JWKS(TLS で取得)から来る。
+                 (let [{:keys [signing-input signature kid alg]}
+                       (signin/signing-input-and-signature id-token json-read)
+                       jwk (provider/jwk-for jwks kid)]
+                   (if-not (and signing-input jwk)
+                     {:id-token id-token :verified? false}
+                     (-> (provider/verify-jwt-signature signing-input signature jwk alg)
+                         (.then (fn [ok] {:id-token id-token :verified? ok})))))))
+        (.then (fn [{:keys [id-token verified?]}]
+                 (binding [access/*tenant-id* (:tenant-id discovery)]
+                   (signin/complete
+                    {:id-token id-token
+                     :json-read json-read
+                     :signature-verified? verified?
+                     :issuer issuer
+                     :audience (client-id)
+                     :nonce (:nonce pending)})))))))
+
+(defn ^:export beginSignIn
+  "サインイン開始 → ASWebAuthenticationSession → callback 照合 → token 交換。"
   []
-  (let [client-id (or (aget js/window "ITONAMI_OIDC_CLIENT_ID") "")
-        tid (tenant-id)]
+  (let [cid (client-id)]
     (cond
-      (str/blank? client-id)
+      (str/blank? cid)
       (update-state! assoc :session
                      (signin-failed :no-client-id "OIDC クライアント ID が未設定です。"))
 
-      (nil? tid)
+      (not (:ok? (:discovery @state)))
       (update-state! assoc :session
                      (signin-failed :organization-not-configured
-                                    "組織が未設定のため利用できません。"))
+                                    "組織テナントを特定できていません。"))
 
       :else
-      (-> (provider/begin-async (assoc (config) :client-id client-id))
-          (.then (fn [{:keys [url pending]}]
-                   (swap! state assoc :pending-signin pending)
-                   (-> (provider/request-authorization! url)
-                       (.then
-                        (fn [{:keys [ok? callback-url cancelled? error]}]
-                          (cond
-                            cancelled?
-                            ;; 利用者が自分で閉じたので、失敗として騒がない。
-                            (update-state! assoc :session nil)
-
-                            (not ok?)
-                            (update-state! assoc :session
-                                           (signin-failed :authorization-failed error))
-
-                            :else
-                            (let [q (provider/callback-url->query callback-url)
-                                  r (signin/redirect->code q (:pending-signin @state))]
-                              (if-not (:ok? r)
-                                ;; state 不一致などはここで止まる。判断は
-                                ;; portable 側(signin)がしている。
-                                (update-state! assoc :session
-                                               (signin-failed (:error r)
-                                                              "サインインを検証できませんでした。"))
-                                (update-state! assoc :session
-                                               (signin-failed
-                                                :token-exchange-not-wired
-                                                "認可は取得できましたが、トークン交換が未配線です。"))))))))))
-          (.catch (fn [e]
-                    (update-state! assoc :session
-                                   (signin-failed :signin-failed
-                                                  (str "サインインを開始できませんでした: "
-                                                       (.-message e))))))))))
+      (let [{:keys [authorize-endpoint]} (:discovery @state)]
+        (-> (provider/begin-async {:authorize-endpoint authorize-endpoint
+                                   :client-id cid
+                                   :redirect-uri onboarding/redirect-uri})
+            (.then (fn [{:keys [url pending]}]
+                     (swap! state assoc :pending-signin pending)
+                     (provider/request-authorization! url)))
+            (.then (fn [{:keys [ok? callback-url cancelled? error]}]
+                     (cond
+                       cancelled? (update-state! assoc :session nil)
+                       (not ok?) (update-state! assoc :session
+                                                (signin-failed :authorization-failed error))
+                       :else
+                       (let [q (provider/callback-url->query callback-url)
+                             r (signin/redirect->code q (:pending-signin @state))]
+                         (if-not (:ok? r)
+                           (update-state! assoc :session
+                                          (signin-failed (:error r)
+                                                         "サインインを検証できませんでした。"))
+                           (-> (exchange-and-complete!
+                                {:code (:code r)
+                                 :discovery (:discovery @state)
+                                 :pending (:pending-signin @state)})
+                               (.then #(update-state! assoc :session %))
+                               (.catch (fn [e]
+                                         (update-state! assoc :session
+                                                        (signin-failed
+                                                         :token-exchange-failed
+                                                         (str "サインインを完了できませんでした: "
+                                                              (.-message e)))))))))))) 
+            (.catch (fn [e]
+                      (update-state! assoc :session
+                                     (signin-failed :signin-failed
+                                                    (str "サインインを開始できませんでした: "
+                                                         (.-message e)))))))))))
 
 ;; ───────────────────────── boot ─────────────────────────
 
@@ -150,4 +197,7 @@
   (if (provider/native-bridge-available?)
     (provider/request-session!)
     (update-state! assoc :session nil))
+  ;; ドメイン連動: 起動と同時にテナントを引く。ここは資格情報を要さないので
+  ;; サインイン前に完了できる。
+  (resolve-organization!)
   (render!))

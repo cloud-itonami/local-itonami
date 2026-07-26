@@ -233,17 +233,24 @@
                                  :preferred_username :upn])}))
 
 (defn complete
-  "token response の ID token を検証し、アクセス判定まで通す。
+  "ID token の claims を検証し、組織判定まで通す。
 
-  `verify-signature-fn` は host capability（`[signing-input signature] -> bool`）。
-  **署名が検証できない ID token は claims を一切見ない** — 未検証 JWT の
-  claims は攻撃者が書いた文字列でしかないので、そこから hd や email を
-  読んで判定するのは判定していないのと同じ。
+  `signature-verified?` は **boolean**（fn ではない）。署名検証は機構
+  （WebCrypto / `provider/verify-jwt-signature`）が非同期で行い、この関数は
+  **その結果だけを読む**。当初 `verify-signature-fn` を受け取る設計にして
+  いたが、WebCrypto の `subtle.verify` は Promise を返すので同期契約を
+  満たせず、cljs 側で必ず壊れる。判断層を Promise で汚すより、機構に
+  先に検証させて結果を渡す方がこの設計の筋に合う。
+
+  **`true` でなければ claims を一切見ない。** truthy では通さない — host が
+  `1` や `\"true\"` を返す実装ミスを許可に変えない。未検証 JWT の claims は
+  攻撃者が書いた文字列でしかないので、そこから tid や email を読んで判定する
+  のは判定していないのと同じ。
 
   戻り値は `local-itonami.access/session` と同じ形なので、そのまま
   cockpit の `:session` に入る。"
-  [{:keys [id-token json-read verify-signature-fn issuer audience nonce now]}]
-  (let [{:keys [claims signing-input signature]}
+  [{:keys [id-token json-read signature-verified? issuer audience nonce now]}]
+  (let [{:keys [claims]}
         (try (oidc/decode-jwt-segments id-token json-read)
              (catch #?(:clj Exception :cljs :default) _ nil))]
     (cond
@@ -251,7 +258,7 @@
       {:status :denied :reason :malformed-id-token
        :message (get access/denial-message :denied)}
 
-      (not (true? (verify-signature-fn signing-input signature)))
+      (not (true? signature-verified?))
       {:status :denied :reason :bad-id-token-signature
        :message (get access/denial-message :denied)}
 
@@ -262,6 +269,17 @@
         (if-not valid?
           {:status :denied :reason :invalid-id-token-claims :detail errors
            :message (get access/denial-message :denied)}
-          ;; ここまで来て初めて claims を信じてよい。ドメイン許可は
+          ;; ここまで来て初めて claims を信じてよい。組織判定は
           ;; local-itonami.access（deny by default）が決める。
           (access/session (claims->profile claims)))))))
+
+(defn signing-input-and-signature
+  "署名検証に必要な材料を取り出す。機構（WebCrypto）へ渡すため。
+  claims は返さない — **検証前の claims を呼び出し側に持たせない**ため。"
+  [id-token json-read]
+  (let [{:keys [signing-input signature header]}
+        (try (oidc/decode-jwt-segments id-token json-read)
+             (catch #?(:clj Exception :cljs :default) _ nil))]
+    (when signing-input
+      {:signing-input signing-input :signature signature
+       :kid (:kid header) :alg (:alg header)})))

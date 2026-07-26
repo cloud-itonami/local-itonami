@@ -216,6 +216,31 @@
                :onclick "window.itonami && window.itonami.beginSignIn()"}
       "サインイン"])))
 
+(defn setup-section
+  "組織登録（ワンクリック）の状況。
+
+  **終わっていない段を『自動』と表示しない。** 管理者権限が要る段が残って
+  いれば、それを次のアクションとして出す — ワンクリックで終わらないものを
+  終わるように見せない。"
+  [setup]
+  (when setup
+    (skin/section
+     (skin/heading 2 "組織の登録")
+     (into [:div {:class "itonami-steps"}]
+           (map (fn [{:keys [label done? automatic? detail requires]}]
+                  [:div {:class (str "itonami-step"
+                                     (when done? " itonami-step--done"))}
+                   [:div {:class "itonami-step__head"}
+                    [:span {:class "itonami-step__label"} label]
+                    (skin/chip (cond done? "完了"
+                                     automatic? "自動"
+                                     :else "要操作")
+                               {:tone (if (or done? automatic?) :neutral :warning)})]
+                   [:small {:class "itonami-step__detail"} detail]
+                   (when (and (not done?) requires)
+                     [:small {:class "itonami-step__requires"} (str "必要: " requires)])])
+                (:steps setup))))))
+
 (defn screen
   "The whole cockpit as one hiccup tree.
 
@@ -227,7 +252,7 @@
   『空で描いておいてデータだけ出さない』にしないのは、空セクションが
   『アクセスできている / 単に0件』と読めてしまうため — 見えないことが
   そのまま『見せていない』の表明になる形にする。"
-  [{:keys [scope metrics effects status session] :as _state}]
+  [{:keys [scope metrics effects status session setup] :as _state}]
   (let [admitted? (= :admitted (:status session))
         by-lane (when effects (group-by lane-of effects))]
     [:div {:class "itonami-app"}
@@ -235,6 +260,7 @@
      (skin/container
       (when (= :error status)
         (skin/notice "itonami.cloud に接続できませんでした。" {:tone :error}))
+      (setup-section setup)
       (sign-in-section session)
       (when admitted?
         (list

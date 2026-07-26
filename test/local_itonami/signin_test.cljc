@@ -121,14 +121,14 @@
                               {:iss "https://accounts.google.com" :aud "cid"
                                :sub "1" :email "jun@gftd.co.jp" :email_verified true
                                :hd "gftd.co.jp" :exp 9999999999 :iat 1})
-                 :verify-signature-fn (constantly false)
+                 :signature-verified? false
                  :issuer "https://accounts.google.com" :audience "cid" :now 1000})]
     (is (= :denied (:status result)))
     (is (= :bad-id-token-signature (:reason result))
         "署名検証に失敗したのに claims を見て許可した")))
 
-(deftest signature-verification-must-return-true-not-truthy
-  (testing "truthy な戻り値(非 boolean)を許可扱いしない — host の実装ミスを拾う"
+(deftest signature-verification-must-be-true-not-truthy
+  (testing "truthy な値(非 boolean)を許可扱いしない — host の実装ミスを拾う"
     (doseq [v [1 "true" :yes [] {}]]
       (is (= :bad-id-token-signature
              (:reason (signin/complete
@@ -136,14 +136,14 @@
                         :json-read (fn [_] {:iss "i" :aud "a" :sub "1"
                                             :email "jun@gftd.co.jp" :email_verified true
                                             :hd "gftd.co.jp" :exp 9999999999})
-                        :verify-signature-fn (constantly v)
+                        :signature-verified? v
                         :issuer "i" :audience "a" :now 1000})))
           (str (pr-str v) " が署名 OK として扱われた")))))
 
 (deftest malformed-id-token-is-denied-not-thrown
   (doseq [t ["" "not-a-jwt" "only.two"]]
     (let [r (signin/complete {:id-token t :json-read json-read
-                              :verify-signature-fn (constantly true)
+                              :signature-verified? true
                               :issuer "i" :audience "a" :now 1})]
       (is (= :denied (:status r)) (str (pr-str t) " で denied にならなかった")))))
 
@@ -153,7 +153,7 @@
   (binding [access/*tenant-id* tenant]
     (signin/complete {:id-token "a.b.c"
                       :json-read (constantly claims)
-                      :verify-signature-fn (constantly true)
+                      :signature-verified? true
                       :issuer (access/tenant-issuer tenant)
                       :audience "cid" :nonce "n1" :now 1000})))
 

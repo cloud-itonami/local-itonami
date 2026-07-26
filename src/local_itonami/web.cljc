@@ -68,7 +68,17 @@
    ".itonami-effect__id{font-family:var(--hig-font-mono)}"
    ".itonami-empty{color:var(--hig-color-secondary-label)}"
    ".itonami-signin-button{margin-top:1rem}"
-   ".itonami-chip--warning{color:var(--hig-palette-red)}"))
+   ".itonami-chip--warning{color:var(--hig-palette-red)}"
+   ".itonami-steps{display:flex;flex-direction:column;gap:0.5rem}"
+   ".itonami-step{border:1px solid var(--hig-color-separator);"
+   "border-radius:0.5rem;padding:0.625rem;display:flex;"
+   "flex-direction:column;gap:0.25rem}"
+   ".itonami-step--done{border-left:4px solid var(--hig-color-tint)}"
+   ".itonami-step__head{display:flex;align-items:center;"
+   "justify-content:space-between;gap:0.5rem}"
+   ".itonami-step__label{font-weight:700;color:var(--hig-color-label)}"
+   ".itonami-step__detail{color:var(--hig-color-secondary-label)}"
+   ".itonami-step__requires{color:var(--hig-palette-red)}"))
 
 (defn dds-css
   "Read the vendored DADS stylesheet off the classpath. jp-go-dds keeps its
