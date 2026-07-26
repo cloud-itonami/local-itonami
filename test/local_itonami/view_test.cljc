@@ -7,24 +7,36 @@
                :cljs [cljs.test :refer-macros [deftest is testing]])
             [clojure.string :as str]
             [clojure.walk :as walk]
+            [local-itonami.org-signin :as org-signin]
             [local-itonami.skin :as skin]
             [local-itonami.view :as view]))
+
+(defn- signed-in
+  "パスキー登録まで完了した状態。**この形を fixture に直書きしない** —
+  `org-signin` の遷移を通すことで、状態の作り方が実装と一致し続ける。"
+  []
+  (-> (org-signin/initial)
+      (org-signin/discovered {:ok true :org "gftd-co-jp"
+                              :tenant "gftd-co-jp/gftd-co-jp" :domain "gftd.co.jp"})
+      (org-signin/password-result {:ok true :enrollmentToken "tok"})
+      (org-signin/enrolled {:ok true :did "did:key:zTest"
+                            :address "jun@gftd.co.jp" :org "gftd-co-jp"})))
 
 (def ^:private sample-state
   "サインイン済みの通常状態。ゲート自体のテストは
   `business-data-is-not-rendered-without-an-admitted-session` が別に持つ ——
   ここは skin / レーン / 空状態の検証なので、業務セクションが描かれる前提を
   fixture 側で満たしておく。"
-  {:status :ready
-   :session {:status :admitted :email "jun@gftd.co.jp"
-             :display-name "Jun Kawasaki" :domain "gftd.co.jp"}
-   :scope {:org "gftdcojp" :repo "gftdcojp"}
+  (merge
+   (signed-in)
+   {:status :ready
+    :scope {:org "gftd-co-jp" :repo "gftd-co-jp"}
    :metrics [{:label "外部テナント" :value "5" :detail "self-registered 含む"}]
    :effects [{:id "eff-1" :kind "crm/advance-opportunity"
               :risk "financial" :state "proposed"}
              {:id "eff-2" :kind "marketing/send-campaign"
               :risk "external-send" :state "waiting-approval"}
-             {:id "eff-3" :kind "mail/send" :risk "external-send" :state "executed"}]})
+              {:id "eff-3" :kind "mail/send" :risk "external-send" :state "executed"}]}))
 
 (defn- classes-in
   "Every class string anywhere in a hiccup tree."
@@ -124,36 +136,56 @@
 
 ;; ───────────────── サインインゲート ─────────────────
 
-(def ^:private admitted-session
-  {:status :admitted :email "jun@gftd.co.jp" :display-name "Jun Kawasaki"
-   :domain "gftd.co.jp"})
 
-(deftest business-data-is-not-rendered-without-an-admitted-session
+
+(deftest business-data-is-not-rendered-until-sign-in-completes
   (testing "未サインインでは業務セクションを一切描かない"
-    (let [s (pr-str (view/screen (assoc sample-state :session nil)))]
+    (let [s (pr-str (view/screen (merge sample-state (org-signin/initial))))]
       (is (str/includes? s "サインイン"))
       (is (not (str/includes? s "現況")))
       (is (not (str/includes? s "承認待ち")))
       (is (not (str/includes? s "eff-1"))
           "承認待ちの effect id が未サインイン画面に出ている")))
 
-  (testing "拒否されたセッションでも同じ — 理由だけ出す"
-    (let [s (pr-str (view/screen
-                     (assoc sample-state :session
-                            {:status :denied :reason :domain-not-allowed
-                             :message "このサービスは gftd.co.jp のアカウントのみ利用できます。"})))]
-      (is (str/includes? s "gftd.co.jp のアカウントのみ"))
+  (testing "組織が判別されただけ（パスワード段）では、まだ何も描かない"
+    (let [mid (org-signin/discovered (org-signin/initial)
+                                     {:ok true :org "gftd-co-jp"
+                                      :tenant "gftd-co-jp/gftd-co-jp" :domain "gftd.co.jp"})
+          s (pr-str (view/screen (merge sample-state mid)))]
+      (is (str/includes? s "初期パスワード"))
+      (is (not (str/includes? s "eff-1"))
+          "組織が分かっただけで業務データを出している")
+      (is (not (str/includes? s "現況")))))
+
+  (testing "引換券を受け取っただけ（パスキー段）でも、まだ描かない"
+    (let [mid (-> (org-signin/initial)
+                  (org-signin/discovered {:ok true :org "gftd-co-jp"
+                                          :tenant "gftd-co-jp/gftd-co-jp" :domain "gftd.co.jp"})
+                  (org-signin/password-result {:ok true :enrollmentToken "tok"}))
+          s (pr-str (view/screen (merge sample-state mid)))]
+      (is (str/includes? s "パスキーを作成"))
+      (is (not (str/includes? s "eff-1"))
+          "パスキー未登録で業務データを出している — 引換券は認可ではない")))
+
+  (testing "拒否されたときは理由だけ出す"
+    (let [denied (org-signin/password-result
+                  (org-signin/discovered (org-signin/initial)
+                                         {:ok true :org "gftd-co-jp"
+                                          :tenant "gftd-co-jp/gftd-co-jp" :domain "gftd.co.jp"})
+                  {:ok false :error "メールアドレスまたはパスワードが違います。"})
+          s (pr-str (view/screen (merge sample-state denied)))]
+      (is (str/includes? s "メールアドレスまたはパスワードが違います"))
       (is (not (str/includes? s "eff-1")))
       (is (not (str/includes? s "現況")))))
 
-  (testing "許可されたセッションでのみ業務セクションが出る"
-    (let [s (pr-str (view/screen (assoc sample-state :session admitted-session)))]
+  (testing "パスキー登録が完了して初めて業務セクションが出る"
+    (let [s (pr-str (view/screen (merge sample-state (signed-in))))]
       (is (str/includes? s "現況"))
       (is (str/includes? s "eff-1"))
       (is (str/includes? s "jun@gftd.co.jp")))))
 
 (deftest effects-are-split-into-lanes
-  (let [s (pr-str (view/screen (assoc sample-state :session admitted-session)))]
+  (let [s (pr-str (view/screen (merge sample-state (signed-in))))]
     (is (str/includes? s "承認待ち — 業務"))
     (is (str/includes? s "承認待ち — 商談"))
     (is (str/includes? s "承認待ち — マーケ")))

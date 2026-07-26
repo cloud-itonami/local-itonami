@@ -1,5 +1,15 @@
 (ns local-itonami.onboarding
   "ワンクリック登録の**計画**を作る。ドメイン1つから、必要な手続きを
+
+  ⚠ **SUPERSEDED（2026-07-26、ADR-2607262300）**: cloud-itonami が自前で
+  identity を提供するようになったため、この ns は live な経路から外れた。
+  現行のサインインは `local-itonami.org-signin` +
+  `cloud-itonami.edge.auth-endpoints`（`/api/auth/*`）。ここに残して
+  あるのは実測で得た知見（Entra の tid/issuer 判定、ドメインからの
+  テナント discovery、ワンクリック登録で実際に必要だった手続き）で、
+  Entra 連携を再開する日が来たときの出発点になる。**新しいコードから
+  この ns を require しない。**
+
   すべて data として出す。
 
   ## 実測してわかった、実際に必要な手続き

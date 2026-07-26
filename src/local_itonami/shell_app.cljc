@@ -23,21 +23,25 @@
   `:session` in the state map. That is the safety floor from the root
   CLAUDE.md — credential material is read by a credential-specific tool, not
   typed into a form by the app."
-  (:require [local-itonami.access :as access]
-            [local-itonami.dom :as dom]
+  (:require [local-itonami.dom :as dom]
+            [local-itonami.org-signin :as org-signin]
             [local-itonami.view :as view]))
 
 (def initial-state
   "State before the host has resolved anything. `:status :booting` is what
   `view/screen` renders as 読み込み中 rather than as an empty queue — an
   operator must be able to tell 'not loaded yet' from 'nothing waiting'."
-  {:status :booting
-   :scope {:org "gftdcojp" :repo "gftdcojp"}
-   :metrics []
-   :effects nil
-   ;; nil = まだサインインしていない。access/session が返す
-   ;; {:status :admitted|:denied ...} が入るまで業務セクションは描かれない。
-   :session nil})
+  (merge
+   {:status :booting
+    :scope {:org "gftd-co-jp" :repo "gftd-co-jp"}
+    :metrics []
+    :effects nil
+   ;; 組織サインインの段（ADR-2607262300）。`:done` になるまで業務
+   ;; セクションは一切描かれない — 空セクションは『アクセスできている /
+   ;; 単に0件』と読めてしまうので、見えないことをそのまま『見せていない』
+   ;; の表明にする。
+    :session nil}
+   (org-signin/initial)))
 
 (defn metrics-of
   "Project the API's tenant metrics into the cockpit's headline numbers.
@@ -65,12 +69,25 @@
   (assoc state :status :ready :effects (vec effects)))
 
 (defn apply-identity
-  "host が解決した provider identity profile を cockpit のサインイン状態に
-  変える。判定は local-itonami.access（deny by default、gftd.co.jp の検証済み
-  Workspace identity のみ）。**この関数は profile を state に残さない** —
-  残すのは access/session が返す表示用の最小限だけ。"
-  [state profile]
-  (assoc state :session (access/session profile)))
+  "サインインの各段の応答を cockpit の状態に畳み込む。
+
+  判定は**サーバ側**（`cloud-itonami.edge.auth-endpoints`）。ここでドメインを
+  検査して弾かない — 同じ規則が2箇所に書かれると必ずずれ、緩い側が穴になる。
+  以前は `local-itonami.access`（Entra ID の tid/issuer 判定）がこの役目を
+  持っていたが、cloud-itonami が自前で identity を提供するようになったので
+  置き換わった（ADR-2607262300）。
+
+  `stage` は `:discovered` / `:password` / `:enrolled` / `:cancelled` /
+  `:failed`。**profile も引換券も state に残さない**（`org-signin/enrolled`
+  が引換券を落とす）。"
+  [state stage payload]
+  (case stage
+    :discovered (org-signin/discovered state payload)
+    :password   (org-signin/password-result state payload)
+    :enrolled   (org-signin/enrolled state payload)
+    :cancelled  (org-signin/cancelled state)
+    :failed     (org-signin/failed state)
+    state))
 
 (defn signed-out
   "サインアウト。業務データも一緒に落とす — session だけ消して effects を
