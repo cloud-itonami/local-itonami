@@ -69,7 +69,8 @@
   `:where` の値:
     `:cljs`         — WebView 内の cljs。host 言語ごとの実装は**不要**
     `:native-exists` — 既に AppDelegate.swift にある（追加実装ゼロ）
-    `:native-new`   — 新規に native 実装が要る唯一のもの"
+    `:native-shared` — native だが kotoba-lang/shell が全アプリ向けに実装済み。
+                       このアプリが書く Swift は**ゼロ**"
   {:random-bytes
    {:where :cljs
     :sig "[n] -> bytes"
@@ -121,7 +122,7 @@
     :impl "AppDelegate.swift deleteSession — 実装済み"}
 
    :open-authorization-url
-   {:where :native-new
+   {:where :native-shared
     :sig "[url] -> redirect-url"
     :why "**native が要る唯一のもの。** 自分の WKWebView を
           accounts.google.com へ遷移させれば済むように見えるが、2つ理由で
@@ -129,7 +130,9 @@
           (disallowed_useragent)。(2) 自分が制御する WebView に IdP の
           ログイン画面を出すと、アプリが資格情報を覗ける構造になる —
           ASWebAuthenticationSession はまさにそれを不可能にするために在る。"
-    :impl "ASWebAuthenticationSession（AppDelegate.swift に未実装）"}})
+    :impl "ASWebAuthenticationSession — kotoba-lang/shell が全アプリ向けに実装
+           （この repo に Swift は無い）。manifest の :macos/oauth-callback-scheme
+           を設定するだけで有効になる。"}})
 
 (defn capabilities-by-where
   "実装先ごとの内訳。『host 言語ごとに何個書くのか』の答えがこれ。"

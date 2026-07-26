@@ -6,8 +6,9 @@
 
   - `:native-exists` 3 個（Keychain）— `AppDelegate.swift` に実装済み。
     ここからは `postMessage` を投げるだけ。
-  - `:native-new` 1 個（`open-authorization-url`）— ASWebAuthenticationSession。
-    **未実装**。`request-authorization!` は未実装であることを明示的に返す。
+  - `:native-shared` 1 個（`open-authorization-url`）— ASWebAuthenticationSession。
+    **kotoba-lang/shell が全アプリ向けに実装済み**なので、この repo に Swift は
+    無い。`app.kotoba.edn` の `:macos/oauth-callback-scheme` を設定するだけ。
 
   判断は一切持たない。全部 `local-itonami.signin` / `local-itonami.access` 側。
   ここにあるのは『OS/ブラウザに頼む』だけの機構。"
@@ -157,21 +158,57 @@
   []
   (some? (some-> js/window .-webkit .-messageHandlers (aget auth-message-name))))
 
-;; ───────────────────────── :native-new（未実装）─────────────────────────
+;; ───────────────────── :native-shared（ASWebAuthenticationSession）─────────────────────
+
+(def authorization-event-name
+  "kotoba-lang/shell の `dispatchAuthorization` が投げる CustomEvent 名。
+  Keychain 側の `itonami-auth-session` と違い、これは shell が全アプリ共通で
+  出すので app 固有の名前ではない。"
+  "kotoba-shell-authorization")
 
 (defn request-authorization!
-  "**未実装。** ASWebAuthenticationSession を開く native capability。
+  "authorization URL を native の ASWebAuthenticationSession で開き、
+  callback URL を Promise で返す。
 
-  自分の WKWebView を authorization URL へ遷移させれば済むように見えるが、
-  Google は embedded webview からの OAuth を拒否する（disallowed_useragent）し、
-  自分が制御する WebView に IdP のログイン画面を出すのは、アプリが資格情報を
-  覗ける構造そのもの。ASWebAuthenticationSession はそれを不可能にするために
-  ある — だからここだけは native に残す。
+  host 言語に残る唯一の capability（kotoba-lang/shell が全アプリ向けに実装、
+  この repo に Swift は無い）。**ここも判断はしない** — callback URL を
+  そのまま返し、state/nonce の照合も claims 検証も
+  `local-itonami.signin` が行う。
 
-  `AppDelegate.swift` に `open-authorization-url` アクションを足し、
-  redirect URL を `dispatchSession` と同じ経路で返すのが次の作業。"
-  [_url]
-  {:ok? false
-   :error :not-implemented
-   :capability :open-authorization-url
-   :message "サインインはまだ利用できません（認証セッションが未実装です）。"})
+  戻り値: `{:ok? true :callback-url s}` /
+          `{:ok? false :cancelled? true}`（利用者が閉じた）/
+          `{:ok? false :error msg}`"
+  [url]
+  (js/Promise.
+   (fn [resolve _reject]
+     (if-not (native-bridge-available?)
+       (resolve {:ok? false :error "native bridge がありません（ブラウザで開いています）。"})
+       (let [handler (atom nil)
+             done! (fn [result]
+                     (when-let [h @handler]
+                       (.removeEventListener js/window authorization-event-name h))
+                     (resolve result))]
+         (reset! handler
+                 (fn [e]
+                   (let [d (.-detail e)
+                         cb (some-> d (aget "callbackURL"))
+                         err (some-> d (aget "error"))
+                         cancelled (true? (some-> d (aget "cancelled")))]
+                     (done! (cond
+                              cancelled {:ok? false :cancelled? true}
+                              err {:ok? false :error err}
+                              cb {:ok? true :callback-url cb}
+                              :else {:ok? false :error "認証セッションが結果を返しませんでした。"})))))
+         (.addEventListener js/window authorization-event-name @handler)
+         (when-not (post-native! {:action "open-authorization-url" :url url})
+           (done! {:ok? false :error "認証セッションを開始できませんでした。"})))))))
+
+(defn callback-url->query
+  "callback URL のクエリを map にする。`signin/redirect->code` に渡す形。"
+  [callback-url]
+  (let [u (js/URL. callback-url)
+        params (.-searchParams u)]
+    (persistent!
+     (reduce (fn [m k] (assoc! m k (.get params k)))
+             (transient {})
+             (js->clj (js/Array.from (.keys params)))))))

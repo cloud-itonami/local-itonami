@@ -8,10 +8,12 @@
   reagent を入れていないのは意図的: view は純 hiccup なので
   `html.core/->html` で文字列にして差し替えれば足り、SSR と完全に同じ経路を
   通る（描画差の原因を1つ減らす）。差分更新が要るほど大きい画面ではない。"
-  (:require [html.core :as html]
+  (:require [clojure.string :as str]
+            [html.core :as html]
             [local-itonami.access :as access]
             [local-itonami.provider :as provider]
             [local-itonami.shell-app :as shell-app]
+            [local-itonami.signin :as signin]
             [local-itonami.view :as view]))
 
 (defonce state (atom shell-app/initial-state))
@@ -69,25 +71,54 @@
    :redirect-uri "jp.co.gftd.itonami:/oauth2redirect"
    :hd access/allowed-domain})
 
-(defn ^:export beginSignIn
-  "サインイン開始。PKCE を組んで authorization URL を作り、native の認証
-  セッションに渡す。
+(defn- signin-failed [reason message]
+  {:status :denied :reason reason :message message})
 
-  現状は `provider/request-authorization!` が `:not-implemented` を返すので、
-  そのメッセージを画面に出して止まる — **できないことをできたように見せない**。"
+(defn ^:export beginSignIn
+  "サインイン開始 → ASWebAuthenticationSession → callback 照合。
+
+  token 交換から先（`signin/token-request` → `http-post-form` → JWKS →
+  `signin/complete`）はまだ配線していない。**できたふりをしない**ので、
+  callback を受け取れたところで『続きは未配線』と表示して止まる。"
   []
-  (-> (provider/begin-async (assoc config :client-id (or (aget js/window "ITONAMI_OIDC_CLIENT_ID") "")))
-      (.then (fn [{:keys [url pending]}]
-               (swap! state assoc :pending-signin pending)
-               (let [r (provider/request-authorization! url)]
-                 (when-not (:ok? r)
-                   (update-state! assoc :session {:status :denied
-                                                  :reason (:error r)
-                                                  :message (:message r)})))))
-      (.catch (fn [e]
-                (update-state! assoc :session
-                               {:status :denied :reason :signin-failed
-                                :message (str "サインインを開始できませんでした: " (.-message e))})))))
+  (let [client-id (or (aget js/window "ITONAMI_OIDC_CLIENT_ID") "")]
+    (if (str/blank? client-id)
+      (update-state! assoc :session
+                     (signin-failed :no-client-id
+                                    "OIDC クライアント ID が未設定です。"))
+      (-> (provider/begin-async (assoc config :client-id client-id))
+          (.then (fn [{:keys [url pending]}]
+                   (swap! state assoc :pending-signin pending)
+                   (-> (provider/request-authorization! url)
+                       (.then
+                        (fn [{:keys [ok? callback-url cancelled? error]}]
+                          (cond
+                            cancelled?
+                            ;; 利用者が自分で閉じたので、失敗として騒がない。
+                            (update-state! assoc :session nil)
+
+                            (not ok?)
+                            (update-state! assoc :session
+                                           (signin-failed :authorization-failed error))
+
+                            :else
+                            (let [q (provider/callback-url->query callback-url)
+                                  r (signin/redirect->code q (:pending-signin @state))]
+                              (if-not (:ok? r)
+                                ;; state 不一致などはここで止まる。判断は
+                                ;; portable 側(signin)がしている。
+                                (update-state! assoc :session
+                                               (signin-failed (:error r)
+                                                              "サインインを検証できませんでした。"))
+                                (update-state! assoc :session
+                                               (signin-failed
+                                                :token-exchange-not-wired
+                                                "認可は取得できましたが、トークン交換が未配線です。"))))))))))
+          (.catch (fn [e]
+                    (update-state! assoc :session
+                                   (signin-failed :signin-failed
+                                                  (str "サインインを開始できませんでした: "
+                                                       (.-message e))))))))))
 
 ;; ───────────────────────── boot ─────────────────────────
 

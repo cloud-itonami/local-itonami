@@ -43,7 +43,7 @@
       (is (string? (:sig v)) (str k " に :sig が無い"))
       (is (string? (:why v)) (str k " に :why が無い"))
       (is (string? (:impl v)) (str k " に実装先が無い"))
-      (is (contains? #{:cljs :native-exists :native-new} (:where v))
+      (is (contains? #{:cljs :native-exists :native-shared} (:where v))
           (str k " の :where が不正")))))
 
 (deftest host-language-work-is-exactly-one-capability
@@ -56,9 +56,11 @@
       (is (= #{:store-session :read-session :delete-session}
              (:native-exists by))
           "AppDelegate.swift に既にあるのは Keychain の3つ")
-      (is (= #{:open-authorization-url} (:native-new by))
-          "新規に native を書く必要があるのは認証セッションだけ — ここが
-           増えるなら、その capability が本当に機構か(判断でないか)を疑う")))
+      (is (= #{:open-authorization-url} (:native-shared by))
+          "native だが kotoba-lang/shell が全アプリ向けに実装済み")
+      (is (nil? (:native-new by))
+          "このアプリが自分で書く Swift はゼロ — 増えるなら、その capability が
+           本当に機構か(判断でないか)を疑う")))
 
   (testing "署名検証は cljs 側。WebCrypto が RS256/ES256 を持つので native に
             落とす理由が無い(当初 SecKeyVerifySignature と書いたのは誤り)"

@@ -33,6 +33,10 @@
  :macos/auth-bridge :keychain-cacao
  :macos/keychain-service "dev.kotoba.itonami.auth"
  :macos/keychain-account "gftdcojp-session"
+ ;; ASWebAuthenticationSession の callback scheme（kotoba-lang/shell の
+ ;; open-authorization-url capability）。未設定だと capability は「未設定」を
+ ;; 返す — 適当な scheme で待ち受けて他アプリの redirect を拾わないため。
+ :macos/oauth-callback-scheme "jp.co.gftd.itonami"
 
  ;; The scaffolded host serves this directory over kotoba-webbundle:// in a
  ;; WKWebView. Without it, `app scaffold` writes a placeholder page instead
