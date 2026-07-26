@@ -1,0 +1,11 @@
+;; WebView 内で動く cljs バンドル。kotoba-lang/shell の描画基盤は WKWebView
+;; なので、host provider の capability の大半(5/9)はここに入る — native に
+;; 落ちるのは Keychain(実装済み)と認証セッション(1個)だけ。
+{:deps {:aliases [:cljs-build]}
+ :builds
+ {:app {:target :browser
+        :output-dir "dist/js"
+        :asset-path "js"
+        :modules {:main {:init-fn local-itonami.app/init}}
+        :compiler-options {:optimizations :advanced
+                           :infer-externs :auto}}}}

@@ -55,9 +55,8 @@
    :card "dds-ext-card"
    :heading "dads-heading"
    :chip "dads-chip-label"
-   :chip-warning "dads-chip-label--warning"
-   :notice "dads-notification-banner"
-   :notice-error "dads-notification-banner--error"})
+   ;; DADS は severity を data-type 属性で選ぶので、ここに修飾子クラスは無い。
+   :notice "dads-notification-banner"})
 
 (def kotoba-ui
   "kotoba-ui/HIG class vocabulary, for an app that wants light+dark. Present
@@ -115,16 +114,43 @@
   (into [(keyword (str "h" level)) {:class (cls :heading)}] children))
 
 (defn chip
-  "`:tone` — `:neutral` (default) or `:warning`."
+  "`:tone` — `:neutral` (default) or `:warning`。
+
+  DADS の `dads-chip-label` は severity 修飾子を持たない（`__icon` しか
+  子要素が無い）ので、色は app 所有の `itonami-chip--warning` で付ける。
+  上流に無い修飾子を捏造してクラス名に書かない — 書いても CSS が無いので
+  無言で効かないだけになる。"
   ([label] (chip label {}))
   ([label {:keys [tone]}]
-   [:span {:class (if (= :warning tone) (cls :chip :chip-warning) (cls :chip))}
+   [:span {:class (str (cls :chip)
+                       (when (= :warning tone) " itonami-chip--warning"))}
     (str label)]))
 
+(def ^:private dads-notice-type
+  "DADS の notification banner は severity を **class ではなく
+  `data-type` 属性**で選ぶ（`dads-notification-banner[data-type=\"error\"]`）。
+
+  最初 `dads-notification-banner--error` という修飾子クラスを書いていたが、
+  vendored CSS にそんなセレクタは無く、しかも banner の base rule は
+  `__heading`/`__body` の子要素を前提にした内部レイアウトなので、裸の div に
+  文字列を入れると**1文字ずつ縦積みになる**（実機で確認した）。"
+  {:error "error" :warning "warning" :success "success" :info "info-1"})
+
 (defn notice
-  "`:tone` — `:info` (default) or `:error`."
+  "`:tone` — `:info` (default) / `:error` / `:warning` / `:success`。
+
+  DADS では実際の contract（`data-type` + `data-style` + `__body`）を満たす
+  markup を出す。kotoba-ui skin では class 表現に落ちる — severity の表し方が
+  2つのデザインシステムで違う、というのがまさに接ぎ目がある理由。"
   ([body] (notice body {}))
-  ([body {:keys [tone]}]
-   [:div {:class (if (= :error tone) (cls :notice :notice-error) (cls :notice))
-          :role (if (= :error tone) "alert" "status")}
-    body]))
+  ([body {:keys [tone] :or {tone :info}}]
+   (let [role (if (= :error tone) "alert" "status")]
+     (if (= :dads (skin-id))
+       [:div {:class (cls :notice)
+              :data-type (get dads-notice-type tone "info-1")
+              :data-style "standard"
+              :role role}
+        [:div {:class "dads-notification-banner__body"} body]]
+       [:div {:class (if (= :error tone) (cls :notice :notice-error) (cls :notice))
+              :role role}
+        body]))))

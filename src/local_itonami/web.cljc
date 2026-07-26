@@ -66,7 +66,9 @@
    ".itonami-effect__meta{display:flex;gap:0.75rem;"
    "color:var(--hig-color-secondary-label)}"
    ".itonami-effect__id{font-family:var(--hig-font-mono)}"
-   ".itonami-empty{color:var(--hig-color-secondary-label)}"))
+   ".itonami-empty{color:var(--hig-color-secondary-label)}"
+   ".itonami-signin-button{margin-top:1rem}"
+   ".itonami-chip--warning{color:var(--hig-palette-red)}"))
 
 (defn dds-css
   "Read the vendored DADS stylesheet off the classpath. jp-go-dds keeps its
@@ -81,7 +83,11 @@
    {:title "itonami"
     :description "itonami.cloud の承認キュー"
     :css (dds-css)
-    :app-css (str tokens/skin-css app-css)}
+    :app-css (str tokens/skin-css app-css)
+    ;; shadow-cljs の browser build。SSR が出した同じ view を、状態が変わる
+    ;; たびに local-itonami.app が再描画する。defer なので初回描画は SSR の
+    ;; ままで、JS が落ちても画面は出る。
+    :head [[:script {:src "js/main.js" :defer true}]]}
    (view/screen state)))
 
 (defn -main

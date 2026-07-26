@@ -15,7 +15,7 @@
   | | 誰が持つ | 何語 | 何回書くか |
   |---|---|---|---|
   | **判断** PKCE 検証・state/nonce 照合・ID token claims 検証・hd/email_verified 抽出・profile 正規化・ドメイン許可 | この ns と `local-itonami.access` | portable（`.cljc` → 将来 `.kotoba`） | **1回** |
-  | **機構** TLS transport・JWT 署名の crypto 検証・Keychain・ブラウザセッション | host provider | Swift / Kotlin / JS | host ごと（ただし**判断ゼロ**） |
+  | **機構** transport・JWT 署名検証・Keychain・ブラウザセッション | host provider | **大半は cljs**（WebCrypto/fetch）。native は Keychain(実装済み) と認証セッション(1個)だけ | `capabilities-by-where` を参照 |
 
   ### なぜ transpile ではないのか
 
@@ -26,9 +26,11 @@
   2. **判断が host 言語に散ると監査できない。** capability confinement の
      利点は『判断が1つの artifact に閉じている』ことなので、judgment を
      Swift/Kotlin に写した時点でその性質を失う。
-  3. **N は既に小さい。** 実測: kotoba-lang/shell が生成する macOS の
-     `AppDelegate.swift` は約 140 行で、Keychain の read/write/delete と
-     WKWebView と message dispatch しか無い — 判断は既にゼロ。
+  3. **N は既に小さい。** 実測: kotoba-lang/shell の描画基盤は WKWebView で、
+     生成される `AppDelegate.swift` は 143 行・UI コード無し・message bridge は
+     Keychain の3アクションだけ（SwiftUI は使っていない）。つまり capability の
+     大半は **WebView 内の cljs** で書けて host 言語には落ちない — 実際
+     `capabilities` の 9 個中、新規に native が要るのは 1 個だけ。
 
   『host 言語ごとに実装が要る』は正しいが、正しい対処は transpile ではなく
   **N を小さく固定する**こと: host は下の `capabilities` に対する判断ゼロの
@@ -50,60 +52,89 @@
 ;; ───────────────────────── host capability contract ─────────────────────────
 
 (def capabilities
-  "host provider が満たすべき **capability の全量**。これが『host 言語ごとに
-  書く分量』の上限で、どれも判断を含まない。
+  "host provider が満たすべき capability の全量と、**それぞれどこで実装するか**。
 
-  この map を実装の checklist として使う（増やすときは、その capability が
-  本当に機構であって判断でないかを先に確かめる）。"
+  ## 訂正（2026-07-26）
+
+  当初これを『host 言語ごとに9個実装する』前提で書いたが、実測すると誤り
+  だった。kotoba-lang/shell の描画基盤は WKWebView で、生成される
+  `AppDelegate.swift` は 143 行・UI コードなし・message bridge は
+  `request-session` / `save-session` / `delete-session` の3つだけ（Keychain と
+  生体認証のみ）。SwiftUI は使っていない。
+
+  したがって **9個中8個は cljs（WebCrypto / fetch）で書ける**。しかも
+  `authentication.adapters.webcrypto` に `random-token` / `sha256-bytes` /
+  `pkce-pair` が既にある。
+
+  `:where` の値:
+    `:cljs`         — WebView 内の cljs。host 言語ごとの実装は**不要**
+    `:native-exists` — 既に AppDelegate.swift にある（追加実装ゼロ）
+    `:native-new`   — 新規に native 実装が要る唯一のもの"
   {:random-bytes
-   {:sig "[n] -> bytes"
-    :why "PKCE code verifier と state/nonce の生成。CSPRNG は OS のもの。"
-    :macos "SecRandomCopyBytes"}
+   {:where :cljs
+    :sig "[n] -> bytes"
+    :why "PKCE code verifier と state/nonce。"
+    :impl "js/crypto.getRandomValues — authentication.adapters.webcrypto/random-token"}
 
    :sha256
-   {:sig "[string] -> bytes"
+   {:where :cljs
+    :sig "[string] -> bytes"
     :why "PKCE S256 code challenge。"
-    :macos "CryptoKit SHA256"}
-
-   :open-authorization-url
-   {:sig "[url] -> (redirect query params)"
-    :why "ユーザーが IdP で同意する。ここはアプリ内 WebView ではなく OS の
-          認証セッションを使う — アプリが資格情報のフォームを描かない、が
-          安全床(root CLAUDE.md ①)。"
-    :macos "ASWebAuthenticationSession"}
+    :impl "js/crypto.subtle.digest — authentication.adapters.webcrypto/sha256-bytes"}
 
    :http-post-form
-   {:sig "[url form-params] -> {:status :body}"
-    :why "token endpoint への code 交換。client secret を運ぶので TLS は
-          OS のスタックに任せる。"
-    :macos "URLSession"}
+   {:where :cljs
+    :sig "[url form-body] -> {:status :body}"
+    :why "token endpoint への code 交換。"
+    :impl "fetch"}
 
    :http-get-json
-   {:sig "[url] -> parsed-json"
+   {:where :cljs
+    :sig "[url] -> parsed-json"
     :why "discovery document と JWKS の取得。"
-    :macos "URLSession + JSONSerialization"}
+    :impl "fetch + js/JSON.parse"}
 
    :verify-jwt-signature
-   {:sig "[signing-input signature jwk alg] -> boolean"
-    :why "**この一点だけは絶対に host に置く。** 署名検証を portable 側で
-          やろうとすると RS256/ES256 の実装を自前で持つことになり、そこが
-          最も壊れやすい。OS の検証済み実装を使う。"
-    :macos "SecKeyVerifySignature"}
+   {:where :cljs
+    :sig "[signing-input signature jwk alg] -> boolean"
+    :why "ID token の署名検証。**WebCrypto が RS256/ES256 を標準で持つ**ので
+          native に落とす理由が無い（当初 SecKeyVerifySignature に置くと
+          書いたのは、WKWebView 前提を見落としていた誤り）。"
+    :impl "js/crypto.subtle.importKey + js/crypto.subtle.verify"}
 
    :store-session
-   {:sig "[session] -> ok"
-    :why "セッションの保管。アプリのメモリにも disk にも置かない。"
-    :macos "Keychain (kSecClassGenericPassword)"}
+   {:where :native-exists
+    :sig "postMessage {:action \"save-session\"}"
+    :why "セッション保管。アプリのメモリにも disk にも置かない。"
+    :impl "AppDelegate.swift saveSession — 実装済み"}
 
    :read-session
-   {:sig "[] -> session|nil"
-    :why "起動時の復元。"
-    :macos "Keychain"}
+   {:where :native-exists
+    :sig "postMessage {:action \"request-session\"}"
+    :why "起動時の復元。LAContext で生体認証も掛かる。"
+    :impl "AppDelegate.swift unlockSession/readSession — 実装済み"}
 
    :delete-session
-   {:sig "[] -> ok"
+   {:where :native-exists
+    :sig "postMessage {:action \"delete-session\"}"
     :why "サインアウト。"
-    :macos "Keychain"}})
+    :impl "AppDelegate.swift deleteSession — 実装済み"}
+
+   :open-authorization-url
+   {:where :native-new
+    :sig "[url] -> redirect-url"
+    :why "**native が要る唯一のもの。** 自分の WKWebView を
+          accounts.google.com へ遷移させれば済むように見えるが、2つ理由で
+          駄目: (1) Google は embedded webview からの OAuth を拒否する
+          (disallowed_useragent)。(2) 自分が制御する WebView に IdP の
+          ログイン画面を出すと、アプリが資格情報を覗ける構造になる —
+          ASWebAuthenticationSession はまさにそれを不可能にするために在る。"
+    :impl "ASWebAuthenticationSession（AppDelegate.swift に未実装）"}})
+
+(defn capabilities-by-where
+  "実装先ごとの内訳。『host 言語ごとに何個書くのか』の答えがこれ。"
+  []
+  (reduce-kv (fn [m k v] (update m (:where v) (fnil conj #{}) k)) {} capabilities))
 
 ;; ───────────────────────── 1. 開始 ─────────────────────────
 

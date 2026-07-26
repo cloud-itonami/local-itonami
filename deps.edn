@@ -40,6 +40,10 @@
   ;; clojure -M:web [out-dir] -> writes the WKWebView bundle :web/dist-dir
   ;; points at. Same hiccup views the native kotoba:dom path compiles.
   :web {:main-opts ["-m" "local-itonami.web"]}
+  ;; shadow-cljs の browser build 用。cljs 本体はここでだけ要る
+  ;; (JVM のテストと :web の SSR には不要)。
+  :cljs-build {:extra-deps {org.clojure/clojurescript {:mvn/version "1.11.132"}
+                            thheller/shadow-cljs {:mvn/version "2.28.20"}}}
   :lint {:replace-deps {clj-kondo/clj-kondo {:mvn/version "2024.11.14"}}
          :main-opts ["-m" "clj-kondo.main" "--lint" "src" "test"
                      "--fail-level" "error"]}}}

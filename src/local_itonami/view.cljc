@@ -207,7 +207,14 @@
     (skin/section
      (skin/heading 2 "サインイン")
      [:p {:class "itonami-empty"}
-      (str access/allowed-domain " の組織アカウントでサインインしてください。")])))
+      (str access/allowed-domain " の組織アカウントでサインインしてください。")]
+     ;; onclick は cljs バンドル(local-itonami.app)が window.itonami に載せる。
+     ;; SSR だけの状態で押しても何も起きない = このボタンが動くこと自体が
+     ;; 「WebView 内で cljs が生きている」の観測点でもある。
+     [:button {:class "dads-button dads-button--solid-fill itonami-signin-button"
+               :type "button"
+               :onclick "window.itonami && window.itonami.beginSignIn()"}
+      "サインイン"])))
 
 (defn screen
   "The whole cockpit as one hiccup tree.

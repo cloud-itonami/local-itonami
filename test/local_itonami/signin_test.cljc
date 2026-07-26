@@ -38,11 +38,31 @@
              :http-get-json :verify-jwt-signature
              :store-session :read-session :delete-session}
            (set (keys signin/capabilities)))))
-  (testing "各 capability に signature と理由と macOS の実装先がある"
+  (testing "各 capability に signature・理由・実装先・実装場所がある"
     (doseq [[k v] signin/capabilities]
       (is (string? (:sig v)) (str k " に :sig が無い"))
       (is (string? (:why v)) (str k " に :why が無い"))
-      (is (string? (:macos v)) (str k " に macOS の実装先が無い")))))
+      (is (string? (:impl v)) (str k " に実装先が無い"))
+      (is (contains? #{:cljs :native-exists :native-new} (:where v))
+          (str k " の :where が不正")))))
+
+(deftest host-language-work-is-exactly-one-capability
+  (testing "kotoba-shell は WKWebView なので、大半は cljs で書ける"
+    (let [by (signin/capabilities-by-where)]
+      (is (= #{:random-bytes :sha256 :http-post-form :http-get-json
+               :verify-jwt-signature}
+             (:cljs by))
+          "cljs で書ける capability の集合が変わった")
+      (is (= #{:store-session :read-session :delete-session}
+             (:native-exists by))
+          "AppDelegate.swift に既にあるのは Keychain の3つ")
+      (is (= #{:open-authorization-url} (:native-new by))
+          "新規に native を書く必要があるのは認証セッションだけ — ここが
+           増えるなら、その capability が本当に機構か(判断でないか)を疑う")))
+
+  (testing "署名検証は cljs 側。WebCrypto が RS256/ES256 を持つので native に
+            落とす理由が無い(当初 SecKeyVerifySignature と書いたのは誤り)"
+    (is (= :cljs (get-in signin/capabilities [:verify-jwt-signature :where])))))
 
 ;; ───────────────────────── begin ─────────────────────────
 
