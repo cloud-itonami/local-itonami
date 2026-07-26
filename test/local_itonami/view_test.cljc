@@ -105,3 +105,13 @@
   (is (true? (view/needs-attention? {:state "waiting-approval"})))
   (is (false? (view/needs-attention? {:state "executed"})))
   (is (false? (view/needs-attention? {:state nil}))))
+
+(deftest metrics-empty-and-not-loaded-are-distinguishable
+  (testing "the boot state must not render a heading over a blank box"
+    (is (str/includes? (pr-str (view/metrics-section [] :booting)) "読み込み中")))
+  (testing "a failed fetch says so rather than showing nothing"
+    (is (str/includes? (pr-str (view/metrics-section [] :error)) "取得できませんでした")))
+  (testing "real metrics render"
+    (is (str/includes?
+         (pr-str (view/metrics-section [{:label "外部テナント" :value "5" :detail "d"}] :ready))
+         "外部テナント"))))

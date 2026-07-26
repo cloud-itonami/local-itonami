@@ -128,6 +128,27 @@
     [:span {:class "itonami-brand"} "itonami"]
     [:span {:class "itonami-scope"} (str org "/" repo)])])
 
+(defn metrics-section
+  "Headline numbers, with the same three-state treatment `queue-section`
+  gets. An empty metrics grid is indistinguishable from a failed render —
+  the first real launch of this app showed exactly that: a 現況 heading over
+  a blank box, because the boot state carries `:metrics []`. Applying the
+  distinction to one section and not the other was the bug."
+  [metrics status]
+  (skin/section
+   (skin/heading 2 "現況")
+   (cond
+     (seq metrics)
+     (into [:div {:class "itonami-metrics"}]
+           (map (fn [{:keys [label value detail]}] (metric label value detail))
+                metrics))
+
+     (= :error status)
+     [:p {:class "itonami-empty"} "取得できませんでした。"]
+
+     :else
+     [:p {:class "itonami-empty"} "読み込み中…"])))
+
 (defn screen
   "The whole cockpit as one hiccup tree.
 
@@ -140,9 +161,5 @@
    (skin/container
     (when (= :error status)
       (skin/notice "itonami.cloud に接続できませんでした。" {:tone :error}))
-    (skin/section
-     (skin/heading 2 "現況")
-     (into [:div {:class "itonami-metrics"}]
-           (map (fn [{:keys [label value detail]}] (metric label value detail))
-                (or metrics []))))
+    (metrics-section metrics status)
     (queue-section effects))])

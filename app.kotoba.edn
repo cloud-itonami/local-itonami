@@ -34,5 +34,11 @@
  :macos/keychain-service "dev.kotoba.itonami.auth"
  :macos/keychain-account "gftdcojp-session"
 
+ ;; The scaffolded host serves this directory over kotoba-webbundle:// in a
+ ;; WKWebView. Without it, `app scaffold` writes a placeholder page instead
+ ;; (:web-assets {:source nil :placeholder? true}) -- which is exactly what
+ ;; the first scaffold of this repo produced. Regenerate with `clojure -M:web`.
+ :web/dist-dir "dist"
+
  :api {:base-url "https://itonami.cloud"
        :tenant {:org "gftdcojp" :repo "gftdcojp"}}}
