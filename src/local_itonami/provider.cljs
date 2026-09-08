@@ -12,7 +12,7 @@
 
   判断は一切持たない。全部 `local-itonami.signin` / `local-itonami.access` 側。
   ここにあるのは『OS/ブラウザに頼む』だけの機構。"
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [authentication.adapters.webcrypto :as webcrypto]))
 
 ;; ───────────────────────── bytes / base64url ─────────────────────────
