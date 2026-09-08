@@ -57,7 +57,7 @@
   （`oauth2.pkce/generate-code-verifier` が `random-bytes-fn` を取るのと
   同じ流儀）。だから JVM でも cljs でも同じテストが通り、host を差し替えても
   判断は変わらない。"
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [oauth2.core :as oauth2]
             [oauth2.pkce :as pkce]
             [oidc.core :as oidc]

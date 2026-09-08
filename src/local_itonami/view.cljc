@@ -27,7 +27,7 @@
   The cost of that split is real and named: the two cockpits can drift. What
   keeps them honest is the API contract itself (`/api/{org}/{repo}/…`), not a
   shared render path."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [local-itonami.org-signin :as org-signin]
             [local-itonami.skin :as skin]))
 

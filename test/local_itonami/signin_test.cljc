@@ -4,7 +4,7 @@
   実利でもある。"
   (:require #?(:clj [clojure.test :refer [deftest is testing]]
                :cljs [cljs.test :refer-macros [deftest is testing]])
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [local-itonami.access :as access]
             [local-itonami.signin :as signin]))
 

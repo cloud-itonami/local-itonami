@@ -56,7 +56,7 @@
 
   `:default-decision :deny`。テナント GUID が未設定なら**誰も通らない**
   （設定漏れが素通りにならない）。"
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [authentication.identity :as identity]
             [authorization.core :as authz]
             [authorization.model :as m]
@@ -120,8 +120,8 @@
   "`authorization` に渡す判定材料。rule 側に profile を掘らせない。"
   [profile]
   (let [claims (:identity/claims profile)
-        tid (some-> (:tid claims) str str/trim str/lower-case not-empty)
-        expected (some-> *tenant-id* str str/trim str/lower-case not-empty)]
+        tid (some-> (:tid claims) str str/trim str/lower not-empty)
+        expected (some-> *tenant-id* str str/trim str/lower not-empty)]
     {:provider (:identity/provider profile)
      :tid tid
      :tenant-matches? (boolean (and expected tid (= expected tid)))

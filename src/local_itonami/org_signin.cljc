@@ -25,7 +25,7 @@
   最初のサインインで消費され、その場でパスキーに引き換わる。UI もそう表示
   する — ここを普通の『パスワード』と書くと、利用者はブラウザに保存し、
   次回使えないことに驚く。"
-  (:require [clojure.string :as str]))
+  (:require [kotoba.lang.text :as str]))
 
 (def steps
   "`:email` -> `:password` -> `:passkey` -> `:done`
@@ -59,7 +59,7 @@
 (defn submit-email
   "アドレスを受け取る。形だけ見る — **実在も所属もサーバが答える**。"
   [s email]
-  (let [e (some-> email str str/trim str/lower-case)]
+  (let [e (some-> email str str/trim str/lower)]
     (if (or (str/blank? (str e)) (not (str/includes? (str e) "@")))
       (msg s "メールアドレスを入力してください。" :error)
       (busy (assoc s :org-signin/email e)))))

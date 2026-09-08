@@ -40,7 +40,7 @@
   ここを『1クリックで全部終わる』と書かないのは、**テナントに新しいアプリを
   登録する権限は、本来ワンクリックで委譲されるべきものではない**から。
   隠すのではなく、何が要るかを出す。"
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [local-itonami.access :as access]
             [local-itonami.discovery :as discovery]))
 
