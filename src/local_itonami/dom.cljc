@@ -29,7 +29,7 @@
   two op vectors without re-keying. Nothing here performs I/O, touches a
   `js/` global, or references the shell runtime — it is a pure function from
   data to data, which is what makes it testable on the JVM."
-  (:require [clojure.string :as str]))
+  (:require [kotoba.lang.text :as str]))
 
 (defn element?
   "True for a hiccup element vector `[tag …]`."

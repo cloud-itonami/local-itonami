@@ -43,7 +43,7 @@
   it would be the same speculative-generality mistake as the abstraction it
   replaces. ADR-2607262000 records the promotion trigger: **the second app
   that wants to switch skins.** Until then this stays ~80 lines here."
-  (:require [clojure.string :as str]))
+  (:require [kotoba.lang.text :as str]))
 
 (def dads
   "DADS class vocabulary. Names are upstream's (`dads-*`) plus this repo's

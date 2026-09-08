@@ -34,7 +34,7 @@
   さらに issuer から取り出した tid は
   `authorization_endpoint` / `token_endpoint` / `jwks_uri` の全部に同じ GUID が
   現れることを検査してから採用する（1つだけ差し替えられた文書を弾く）。"
-  (:require [clojure.string :as str]))
+  (:require [kotoba.lang.text :as str]))
 
 (def login-host "https://login.microsoftonline.com")
 
@@ -42,7 +42,7 @@
   "ドメインの OIDC discovery URL。**この関数以外で URL を組み立てない** —
   ホストをすり替えられると任意のテナントを我々の組織にできる。"
   [domain]
-  (str login-host "/" (str/lower-case (str/trim (str domain)))
+  (str login-host "/" (str/lower (str/trim (str domain)))
        "/v2.0/.well-known/openid-configuration"))
 
 (def ^:private guid-re
@@ -51,7 +51,7 @@
 (defn- tid-of
   "文字列から Entra テナント GUID を1つ取り出す。"
   [s]
-  (some-> (re-find guid-re (str s)) str/lower-case))
+  (some-> (re-find guid-re (str s)) str/lower))
 
 (defn- microsoft-url? [u]
   (str/starts-with? (str u) (str login-host "/")))

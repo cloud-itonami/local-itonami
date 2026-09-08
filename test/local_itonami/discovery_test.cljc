@@ -5,7 +5,7 @@
   改竄された discovery 文書を弾けるかが本体。"
   (:require #?(:clj [clojure.test :refer [deftest is testing]]
                :cljs [cljs.test :refer-macros [deftest is testing]])
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [local-itonami.discovery :as discovery]
             [local-itonami.access :as access]
             [local-itonami.onboarding :as onboarding]))
@@ -128,7 +128,7 @@
     (is (= [onboarding/redirect-uri] (get-in req [:body :publicClient :redirectUris])))
     (is (true? (get-in req [:body :isFallbackPublicClient])))
     (testing "client secret を持たない — native に同梱しても秘密にならない"
-      (is (not (str/includes? (str/lower-case (pr-str req)) "secret"))))
+      (is (not (str/includes? (str/lower (pr-str req)) "secret"))))
     (testing "delegated scope のみ。テナントのデータを読む application 権限は求めない"
       (is (every? #(= "Scope" (:type %))
                   (get-in req [:body :requiredResourceAccess 0 :resourceAccess]))))
