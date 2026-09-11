@@ -11,7 +11,7 @@ window / provider effect（ネットワーク・Keychain・ファイル）を所
 ```sh
 kotoba-shell app scaffold      # app.kotoba.edn から Xcode/Gradle プロジェクトを生成
 kotoba-shell app build         # ネイティブビルド
-clojure -M:test                # 18 tests / 62 assertions
+kbb -M:test                # 18 tests / 62 assertions
 ```
 
 ## このアプリの役割

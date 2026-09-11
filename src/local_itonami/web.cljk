@@ -122,7 +122,7 @@
 (defn -main
   "Write the web bundle `:web/dist-dir` points at.
 
-    clojure -M:web [out-dir]   (default: dist)
+    kbb -M:web [out-dir]   (default: dist)
 
   Renders `shell-app/initial-state`. There is no data fetch here — wiring the
   API client is the named gap in ADR-2607262000, so what ships today is the

@@ -42,7 +42,7 @@
                       {:git/tag "v0.5.1" :git/sha "dfb30dd6605cb6c0efc275e1df1736f6e90d4d73"}}
          :main-opts ["-m" "cognitect.test-runner"]
          :exec-fn cognitect.test-runner.api/test}
-  ;; clojure -M:web [out-dir] -> writes the WKWebView bundle :web/dist-dir
+  ;; kbb -M:web [out-dir] -> writes the WKWebView bundle :web/dist-dir
   ;; points at. Same hiccup views the native kotoba:dom path compiles.
   :web {:main-opts ["-m" "local-itonami.web"]}
   ;; shadow-cljs の browser build 用。cljs 本体はここでだけ要る

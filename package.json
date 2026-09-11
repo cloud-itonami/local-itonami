@@ -2,5 +2,5 @@
   "name": "local-itonami",
   "private": true,
   "devDependencies": { "shadow-cljs": "2.28.20" },
-  "scripts": { "build": "shadow-cljs release app" }
+  "scripts": { "build": "amu compile --target wasm32-browser app" }
 }
