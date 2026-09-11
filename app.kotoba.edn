@@ -15,7 +15,7 @@
  ;; this app commits, which is real and honoured now; :browser-engine below
  ;; is the documented long-term target, not a claim about today.
  :runtime {:kind :kotoba-wasm
-           :entry "src/local_itonami/shell_app.cljc"
+           :entry "src/local_itonami/shell_app.cljk"
            :namespace local-itonami.shell-app
            :start start
            :surface :kotoba/dom
