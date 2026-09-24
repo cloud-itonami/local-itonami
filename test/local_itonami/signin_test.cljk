@@ -2,7 +2,7 @@
   "判断層の契約テスト。host capability は全部注入なので、実ネットワークも
   実 crypto も無しで、判断だけを決定論的に検証できる — それがこの分割の
   実利でもある。"
-  (:require #?(:clj [clojure.test :refer [deftest is testing]]
+  (:require #?(:clj [kotoba.test :refer [deftest is testing]]
                :cljs [cljs.test :refer-macros [deftest is testing]])
             [kotoba.lang.text :as str]
             [local-itonami.access :as access]
