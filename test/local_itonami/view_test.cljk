@@ -3,7 +3,7 @@
   it is what actually enforces the 共通化 seam. Everything else in this repo
   can be right and the seam is still worthless if one view hard-codes
   `dads-button`."
-  (:require #?(:clj [clojure.test :refer [deftest is testing]]
+  (:require #?(:clj [kotoba.test :refer [deftest is testing]]
                :cljs [cljs.test :refer-macros [deftest is testing]])
             [kotoba.lang.text :as str]
             [clojure.walk :as walk]

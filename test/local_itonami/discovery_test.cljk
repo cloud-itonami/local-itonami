@@ -3,7 +3,7 @@
 
   ここが破れると『任意のテナントを我々の組織にできる』ので、
   改竄された discovery 文書を弾けるかが本体。"
-  (:require #?(:clj [clojure.test :refer [deftest is testing]]
+  (:require #?(:clj [kotoba.test :refer [deftest is testing]]
                :cljs [cljs.test :refer-macros [deftest is testing]])
             [kotoba.lang.text :as str]
             [local-itonami.discovery :as discovery]
