@@ -6,7 +6,7 @@
   (:require #?(:clj [kotoba.test :refer [deftest is testing]]
                :cljs [cljs.test :refer-macros [deftest is testing]])
             [kotoba.lang.text :as str]
-            [clojure.walk :as walk]
+            [kotoba.lang.coll :as walk]
             [local-itonami.org-signin :as org-signin]
             [local-itonami.skin :as skin]
             [local-itonami.view :as view]))
