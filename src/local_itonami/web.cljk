@@ -27,7 +27,7 @@
   own page fn pure by making the caller read it. `jp-go-dds.tokens/skin-css`
   supplies the `--hig-*` bridge plus the design-quality corrections. App CSS
   comes last so it wins."
-  (:require [clojure.java.io :as io]
+  (:require [kotoba.io :as io]
             [jp-go-dds.page :as dds-page]
             [jp-go-dds.tokens :as tokens]
             [local-itonami.shell-app :as shell-app]
@@ -131,6 +131,6 @@
   (let [dir (io/file (or out-dir "dist"))
         html (->html shell-app/initial-state)
         out (io/file dir "index.html")]
-    (.mkdirs dir)
+    (io/mkdirs dir)
     (spit out html)
-    (println (str "wrote " (.getPath out) " (" (count html) " bytes)"))))
+    (println (str "wrote " (io/path out) " (" (count html) " bytes)"))))
