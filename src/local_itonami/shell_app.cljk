@@ -21,7 +21,7 @@
   (`:macos/auth-bridge :keychain-cacao` in `app.kotoba.edn`). This namespace
   never sees a key: it receives whatever the host already resolved as
   `:session` in the state map. That is the safety floor from the root
-  CLAUDE.md — credential material is read by a credential-specific tool, not
+  AGENTS.md — credential material is read by a credential-specific tool, not
   typed into a form by the app."
   (:require [local-itonami.dom :as dom]
             [local-itonami.org-signin :as org-signin]

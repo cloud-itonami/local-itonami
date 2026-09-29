@@ -72,7 +72,7 @@ API 契約（`/api/{org}/{repo}/…`）であって共有レンダリング経�
 セッションは CACAO/`did:key`。macOS Keychain に shell host が保持する
 （`app.kotoba.edn` の `:macos/auth-bridge :keychain-cacao`）。この repo のコードは
 鍵素材を一切見ない — host が解決済みの `:session` を受け取るだけ
-（root CLAUDE.md の安全床①: 認証情報は credential 専用経路で扱い、アプリが
+（root AGENTS.md の安全床①: 認証情報は credential 専用経路で扱い、アプリが
 フォーム入力しない）。Keychain の service/account 名は cloud-itonami の既存
 local surface と揃えてあるので、そちらでサインイン済みなら再認証は起きない。
 
